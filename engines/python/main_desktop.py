@@ -70,6 +70,20 @@ def handle_key_events(eyesy):
                 # Call the dispatch function
                 eyesy.dispatch_key_event(k, v)
 
+# Desktop stand-in for the 5 hardware knobs: hold Q/W/E/R/T to turn knob 1-5 up,
+# A/S/D/F/G to turn it down
+KNOB_UP = [pygame.K_q, pygame.K_w, pygame.K_e, pygame.K_r, pygame.K_t]
+KNOB_DOWN = [pygame.K_a, pygame.K_s, pygame.K_d, pygame.K_f, pygame.K_g]
+KNOB_STEP = 0.01  # per frame while held
+
+def handle_knob_keys(eyesy):
+    pressed = pygame.key.get_pressed()
+    for i in range(5):
+        if pressed[KNOB_UP[i]]:
+            eyesy.knob_hardware[i] = min(1.0, eyesy.knob_hardware[i] + KNOB_STEP)
+        if pressed[KNOB_DOWN[i]]:
+            eyesy.knob_hardware[i] = max(0.0, eyesy.knob_hardware[i] - KNOB_STEP)
+
 print("starting...")
 
 # create eyesy object
@@ -77,10 +91,12 @@ print("starting...")
 # it gets passed to the modes which use the audio midi and knob values
 eyesy = eyesy.Eyesy()
 
-eyesy.GRABS_PATH = "/Users/owen1/sdcard/Grabs/"
-eyesy.MODES_PATH = "/Users/owen1/sdcard/Modes/"
-eyesy.SCENES_PATH = "/Users/owen1/sdcard/Scenes/"
-eyesy.SYSTEM_PATH = "/Users/owen1/sdcard/System/"
+# data folder lives in the repo at <repo>/sdcard (stands in for the device's /sdcard)
+SDCARD = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "sdcard"))
+eyesy.GRABS_PATH = os.path.join(SDCARD, "Grabs") + "/"
+eyesy.MODES_PATH = os.path.join(SDCARD, "Modes") + "/"
+eyesy.SCENES_PATH = os.path.join(SDCARD, "Scenes") + "/"
+eyesy.SYSTEM_PATH = os.path.join(SDCARD, "System") + "/"
 
 # begin init
 try :     
@@ -120,7 +136,7 @@ try :
 
     # init fb and main surface hwscreen
     print("opening frame buffer...")
-    hwscreen = pygame.display.set_mode((4000,2000))#eyesy.RES)
+    hwscreen = pygame.display.set_mode((1280,720))#eyesy.RES)
     eyesy.xres = hwscreen.get_width()
     eyesy.yres = hwscreen.get_height()
     print("opened screen at: " + str(hwscreen.get_size()))
@@ -222,6 +238,7 @@ while 1:
         # key events will be dispatched from here
         #osc.recv()
         handle_key_events(eyesy)
+        handle_knob_keys(eyesy)
         # for repeating keys held down
         eyesy.update_key_repeater()
 
