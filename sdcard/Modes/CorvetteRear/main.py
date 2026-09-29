@@ -289,7 +289,8 @@ def build_wheel(sx, cz, cy=0.38, r=0.38, n=20):
               ([rp(xo + dx*4, 0.09, a) for a in ang], "body", False)]         # painted centre cap
     faces.append(Face([rp(xo, r, a) for a in ang], (float(sx), 0.0, 0.0), "tire", decals))
     faces.append(Face([rp(xi, r, a) for a in ang], (-float(sx), 0.0, 0.0), "tire"))
-    return {"faces": faces, "outer": len(faces) - 2, "lift": 0.0, "center": (0.5 * (xi + xo), cy, cz)}
+    return {"faces": faces, "outer": len(faces) - 2, "lift": 0.0, "center": (0.5 * (xi + xo), cy, cz),
+            "is_wheel": True, "radius": r}
 
 def build_box(x0, x1, y0, y1, z0, z1, ckey, sx=1, always_front=False):
     p = lambda x, y, z: (x, y, z)
@@ -741,7 +742,17 @@ def draw(screen, eyesy):
         return sorted(group, key=lambda a: -dist2(a))
     for a in far_to_near(behind): draw_faces(a["faces"], a["lift"])
     draw_faces(BODY, LIFT)
-    for a in far_to_near(front): draw_faces(a["faces"], a["lift"])
+    for a in far_to_near(front):
+        draw_faces(a["faces"], a["lift"])
+        if a.get("is_wheel"):
+            # body panels that are clearly closer to the camera than this wheel (the tail, the rear
+            # fender) sit in front of it, so paint them again on top of the wheel
+            c = to_cam(a["center"], a["lift"])
+            wheel_dist = math.sqrt(dot(c, c))
+            def nearer(f):
+                fc = to_cam(f.c, LIFT)
+                return math.sqrt(dot(fc, fc)) < wheel_dist - a["radius"]
+            draw_faces([f for f in BODY if f is not None and nearer(f)], LIFT)
 
     # ---- outline only the outside edge of the car ----
     pad = 4
