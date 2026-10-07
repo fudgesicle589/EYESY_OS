@@ -12,6 +12,22 @@ import math
 import time
 import pygame
 
+# ---- adaptive quality: if this pattern runs slowly (say, on a Raspberry Pi) it quietly draws less detail ----
+_lod = {"q": 1.0, "avg": 0.0, "t0": 0.0}
+LOD_BUDGET = 0.016                                             # seconds of drawing per frame to stay under
+_ds = 1.0                                                      # mesh detail scale, set from the quality every frame
+
+def lod_start():
+    _lod["t0"] = time.perf_counter()
+
+def lod_end():
+    dt = time.perf_counter() - _lod["t0"]
+    _lod["avg"] = _lod["avg"] * 0.9 + dt * 0.1 if _lod["avg"] else dt
+    if _lod["avg"] > LOD_BUDGET:
+        _lod["q"] = max(0.2, _lod["q"] - 0.04)
+    elif _lod["avg"] < LOD_BUDGET * 0.55:
+        _lod["q"] = min(1.0, _lod["q"] + 0.01)
+
 # ============================== small vector helpers ==============================
 
 def add(a, b): return (a[0]+b[0], a[1]+b[1], a[2]+b[2])
@@ -30,54 +46,102 @@ def clamp(v, lo=0.0, hi=1.0): return max(lo, min(hi, v))
 # ============================== mesh builders ==============================
 # a mesh is (vertices, vertex normals, faces, face brightness multipliers)
 
+_TRIG = {}
+_FACES_E = {}
+_FACES_C = {}
+_ONES = {}
+
+def _trig(n):
+    t = _TRIG.get(n)
+    if t is None:
+        t = ([math.cos(2 * math.pi * k / n) for k in range(n)], [math.sin(2 * math.pi * k / n) for k in range(n)])
+        _TRIG[n] = t
+    return t
+
+def _ones(n):
+    o = _ONES.get(n)
+    if o is None:
+        o = _ONES[n] = [1.0] * n
+    return o
+
 def ellipsoid(center, right, up, fwd, rx, ry, rz, lat=9, lon=14, squash=0.0, stripe=None):
-    verts, norms, faces, mult = [], [], [], []
+    lat = max(4, int(lat * _ds + 0.5))
+    lon = max(6, int(lon * _ds + 0.5))
+    cth, sth = _trig(lon)
+    cx_, cy_, cz_ = center
+    r0, r1, r2 = right
+    u0, u1, u2 = up
+    f0, f1, f2 = fwd
+    irx2, iry2, irz2 = 1.0 / (rx * rx), 1.0 / (ry * ry), 1.0 / (rz * rz)
+    sqrt, pi = math.sqrt, math.pi
+    verts, norms = [], []
+    va, na = verts.append, norms.append
     for i in range(lat + 1):
-        phi = math.pi * i / lat
+        phi = pi * i / lat
         y = ry * math.cos(phi)
         ring = math.sin(phi)
         s = 1.0 - squash * (1.0 - y / ry) / 2.0            # egg shape: narrower toward the chin
         for j in range(lon):
-            th = 2 * math.pi * j / lon
-            x, z = rx * ring * math.cos(th) * s, rz * ring * math.sin(th) * s
-            n = norm((x / (rx * rx), y / (ry * ry), z / (rz * rz)))
-            verts.append(add(center, add(add(mul(right, x), mul(up, y)), mul(fwd, z))))
-            norms.append(add(add(mul(right, n[0]), mul(up, n[1])), mul(fwd, n[2])))
-    for i in range(lat):
-        for j in range(lon):
-            j2 = (j + 1) % lon
-            faces.append((i * lon + j, i * lon + j2, (i + 1) * lon + j2, (i + 1) * lon + j))
-            mult.append(stripe(i, j) if stripe else 1.0)
+            x, z = rx * ring * cth[j] * s, rz * ring * sth[j] * s
+            nx, ny, nz = x * irx2, y * iry2, z * irz2
+            l = sqrt(nx * nx + ny * ny + nz * nz) or 1.0
+            nx /= l; ny /= l; nz /= l
+            va((cx_ + r0 * x + u0 * y + f0 * z, cy_ + r1 * x + u1 * y + f1 * z, cz_ + r2 * x + u2 * y + f2 * z))
+            na((r0 * nx + u0 * ny + f0 * nz, r1 * nx + u1 * ny + f1 * nz, r2 * nx + u2 * ny + f2 * nz))
+    faces = _FACES_E.get((lat, lon))
+    if faces is None:
+        faces = _FACES_E[(lat, lon)] = [(i * lon + j, i * lon + (j + 1) % lon, (i + 1) * lon + (j + 1) % lon, (i + 1) * lon + j)
+                                        for i in range(lat) for j in range(lon)]
+    if stripe and lat >= 8:
+        mult = [stripe(i, j) for i in range(lat) for j in range(lon)]
+    else:
+        mult = _ones(len(faces))
     return verts, norms, faces, mult
 
+_CAPS = {3: [(1.0, 0.0), (math.sin(math.radians(55)), math.cos(math.radians(55))), (math.sin(math.radians(25)), math.cos(math.radians(25)))],
+         2: [(1.0, 0.0), (math.sin(math.radians(40)), math.cos(math.radians(40)))],
+         1: [(1.0, 0.0)]}
+
 def capsule(p0, p1, r0, r1, sides=8):
-    d = sub(p1, p0)
-    L = length(d) or 1e-6
-    dv = mul(d, 1.0 / L)
-    h = (0.0, 0.0, 1.0) if abs(dv[2]) < 0.9 else (1.0, 0.0, 0.0)
-    u = norm(cross(dv, h))
-    v = cross(dv, u)
-    rings = []                                              # (center of ring, radius, centre used for normals)
-    for th in (90, 55, 25):
-        t = math.radians(th)
-        rings.append((sub(p0, mul(dv, r0 * math.sin(t))), r0 * math.cos(t), p0))
-    rings.append((p0, r0, p0))
-    rings.append((p1, r1, p1))
-    for th in (25, 55, 90):
-        t = math.radians(th)
-        rings.append((add(p1, mul(dv, r1 * math.sin(t))), r1 * math.cos(t), p1))
-    verts, norms, faces = [], [], []
-    for c, r, nc in rings:
+    sides = max(4, int(sides * _ds + 0.5))
+    ca_, sa_ = _trig(sides)
+    x0, y0, z0 = p0
+    x1, y1, z1 = p1
+    dx, dy, dz = x1 - x0, y1 - y0, z1 - z0
+    L = math.sqrt(dx * dx + dy * dy + dz * dz) or 1e-6
+    dx /= L; dy /= L; dz /= L
+    if abs(dz) < 0.9:                                          # any axis that is not parallel to the limb
+        ux, uy, uz = dy, -dx, 0.0
+    else:
+        ux, uy, uz = 0.0, dz, -dy
+    ul = math.sqrt(ux * ux + uy * uy + uz * uz) or 1.0
+    ux /= ul; uy /= ul; uz /= ul
+    vx, vy, vz = dy * uz - dz * uy, dz * ux - dx * uz, dx * uy - dy * ux
+    caps = _CAPS[3 if _ds > 0.85 else (2 if _ds > 0.65 else 1)]
+    rings = []                                                 # (centre, radius, sphere centre used for the normals)
+    for sn, cs in caps:
+        rings.append((x0 - dx * r0 * sn, y0 - dy * r0 * sn, z0 - dz * r0 * sn, r0 * cs, x0, y0, z0, r0))
+    rings.append((x0, y0, z0, r0, x0, y0, z0, r0))
+    rings.append((x1, y1, z1, r1, x1, y1, z1, r1))
+    for sn, cs in reversed(caps):
+        rings.append((x1 + dx * r1 * sn, y1 + dy * r1 * sn, z1 + dz * r1 * sn, r1 * cs, x1, y1, z1, r1))
+    verts, norms = [], []
+    va, na = verts.append, norms.append
+    for cx_, cy_, cz_, r, nx_, ny_, nz_, rs in rings:
+        inv = 1.0 / (rs if rs > 1e-6 else 1e-6)
         for k in range(sides):
-            a = 2 * math.pi * k / sides
-            p = add(c, mul(add(mul(u, math.cos(a)), mul(v, math.sin(a))), r))
-            verts.append(p)
-            norms.append(norm(sub(p, nc)))
-    for i in range(len(rings) - 1):
-        for k in range(sides):
-            k2 = (k + 1) % sides
-            faces.append((i * sides + k, i * sides + k2, (i + 1) * sides + k2, (i + 1) * sides + k))
-    return verts, norms, faces, [1.0] * len(faces)
+            ox = (ux * ca_[k] + vx * sa_[k]) * r
+            oy = (uy * ca_[k] + vy * sa_[k]) * r
+            oz = (uz * ca_[k] + vz * sa_[k]) * r
+            px, py, pz = cx_ + ox, cy_ + oy, cz_ + oz
+            va((px, py, pz))
+            na(((px - nx_) * inv, (py - ny_) * inv, (pz - nz_) * inv))
+    nr = len(rings)
+    faces = _FACES_C.get((nr, sides))
+    if faces is None:
+        faces = _FACES_C[(nr, sides)] = [(i * sides + k, i * sides + (k + 1) % sides, (i + 1) * sides + (k + 1) % sides, (i + 1) * sides + k)
+                                         for i in range(nr - 1) for k in range(sides)]
+    return verts, norms, faces, _ones(len(faces))
 
 def ik3(root, target, l1, l2, pole):
     """two-bone solver in 3D: returns (mid joint, end point); the mid joint bends toward `pole`"""
@@ -266,8 +330,9 @@ def male_meshes(ph):
     def smile_point(x):
         y = -0.90 + 0.20 * (x / 0.52) ** 2
         return add(head_c, add(add(mul(h_right, x), mul(h_up, y)), mul(h_fwd, surface_z(x, y) - 0.005)))
-    xs = [-0.52 + 1.04 * i / 8 for i in range(9)]
-    for i in range(8):
+    SM = 8 if _ds > 0.7 else 4
+    xs = [-0.52 + 1.04 * i / SM for i in range(SM + 1)]
+    for i in range(SM):
         M(capsule(smile_point(xs[i]), smile_point(xs[i + 1]), 0.036, 0.036, 5), "dark")
     for x in (-0.58, 0.58):
         M(capsule(smile_point(x), add(smile_point(x), mul(h_fwd, 0.01)), 0.03, 0.03, 5), "dark")
@@ -282,7 +347,7 @@ def male_meshes(ph):
         fore = norm(sub(wrist, elbow))
         hand_dir = norm(add(fore, (0.0, -0.55, 0.0)))               # the hand hangs a little, like a relaxed wrist
         side_v = norm(cross(hand_dir, (0.0, 0.0, 1.0)))
-        for f in (-0.4, 0.0, 0.4):
+        for f in ((-0.4, 0.0, 0.4) if _ds > 0.7 else (0.0,)):
             tip = add(wrist, mul(norm(add(hand_dir, mul(side_v, f))), 0.62))
             M(capsule(wrist, tip, 0.09, 0.05, 6), "skin")
         hip, knee, ankle, toe, heel = legs[side]
@@ -398,7 +463,7 @@ def lady_meshes(ph):
     TAIL_HALF = 0.32
     th_end = math.pi - math.asin(TAIL_HALF / 0.95)              # where the strap meets the top corner of the tail
     for side in (-1, 1):
-        n_seg = 16
+        n_seg = 16 if _ds > 0.7 else 8
         thetas = [0.60 + (th_end - 0.60) * i / n_seg for i in range(n_seg + 1)]
         def y_at(t):                                            # level at the sides, then it climbs at the back
             u_ = clamp((t - 1.9) / (th_end - 1.9))
@@ -426,7 +491,7 @@ def lady_meshes(ph):
     # the string from the tail down between the cheeks
     def crack(y):
         return (0.0, y, back_z(0.0, y))
-    ys = [Y_APEX - 0.09 * i for i in range(6)]
+    ys = [Y_APEX - 0.09 * i for i in range(6 if _ds > 0.7 else 3)]
     for i in range(len(ys) - 1):
         M(capsule(P_(crack(ys[i])), P_(crack(ys[i + 1])), 0.038, 0.038, 5), "thong")
     # the front: a small triangle that follows the curve of the hips
@@ -465,8 +530,9 @@ def lady_meshes(ph):
     def smile_pt(x):
         y = -0.86 + 0.18 * (x / 0.50) ** 2
         return on_head(x, y, -0.005)
-    xs = [-0.50 + 1.00 * i / 8 for i in range(9)]
-    for i in range(8):
+    SM = 8 if _ds > 0.7 else 4
+    xs = [-0.50 + 1.00 * i / SM for i in range(SM + 1)]
+    for i in range(SM):
         M(capsule(smile_pt(xs[i]), smile_pt(xs[i + 1]), 0.034, 0.034, 5), "dark")
 
     for side in (-1, 1):
@@ -476,7 +542,7 @@ def lady_meshes(ph):
         fore = norm(sub(wrist, elbow))
         hand_dir = norm(add(fore, (0.0, -0.25, 0.0)))
         side_v = norm(cross(hand_dir, (0.0, 0.0, 1.0)))
-        for f in (-0.4, 0.0, 0.4):
+        for f in ((-0.4, 0.0, 0.4) if _ds > 0.7 else (0.0,)):
             tip = add(wrist, mul(norm(add(hand_dir, mul(side_v, f))), 0.55))
             M(capsule(wrist, tip, 0.08, 0.045, 5), "lady")
         hip, knee, ankle, toe, heel = legs[side]
@@ -486,6 +552,13 @@ def lady_meshes(ph):
     return meshes
 
 def draw(screen, eyesy):
+    global _ds
+    lod_start()
+    _ds = math.sqrt(_lod["q"])
+    _draw(screen, eyesy)
+    lod_end()
+
+def _draw(screen, eyesy):
     xres, yres = eyesy.xres, eyesy.yres
     now = time.time()
     if _state["last"] is None:
@@ -559,8 +632,11 @@ def draw(screen, eyesy):
         r = r * m + sp; g = g * m + sp; b_ = b_ * m + sp
         return (255 if r > 255 else int(r), 255 if g > 255 else int(g), 255 if b_ > 255 else int(b_))
 
-    # ---- transform, cull, shade ----
+    # ---- transform, cull, shade (a vertex is only projected if a visible face uses it) ----
     drawlist = []
+    append = drawlist.append
+    fs_cache = {}
+    sqrt = math.sqrt
     for (verts, norms, faces, mult), mat, dx, yaw, sc, mirror in meshes:
         a_ = yaw + spin                                      # turn the character, then the whole turntable
         c1, s1_ = math.cos(a_), math.sin(a_)
@@ -569,30 +645,58 @@ def draw(screen, eyesy):
         if mirror:
             xx, zx = -xx, -zx
         nxx, nxz, nzx, nzz = (-c1 if mirror else c1), s1_, (s1_ if mirror else -s1_), c1
-        pv, pn = [], []
-        for (x, y, z), (nx, ny, nz) in zip(verts, norms):
-            xr = x * xx + z * xz + ox_
-            zr = x * zx + z * zz + oz_
-            depth = D - zr
-            yy = FLOOR + (y - FLOOR) * sc
-            pv.append((cx + xr * f / depth, cy - (yy - yc) * f / depth, zr))
-            pn.append((nx * nxx + nz * nxz, ny, nx * nzx + nz * nzz))
+        key = id(faces), id(norms)
+        fsum = fs_cache.get(key)
+        if fsum is None:                                     # the summed model-space normal of every face (shared by both ladies)
+            fsum = []
+            for i0, i1, i2, i3 in faces:
+                n0, n1, n2, n3 = norms[i0], norms[i1], norms[i2], norms[i3]
+                fsum.append((n0[0] + n1[0] + n2[0] + n3[0], n0[1] + n1[1] + n2[1] + n3[1], n0[2] + n1[2] + n2[2] + n3[2]))
+            fs_cache[key] = fsum
+        cp = [None] * len(verts)
+        cz = [0.0] * len(verts)
         bias = 0.35 if mat not in ("skin", "lady", "thong") else 0.0   # eyes and face marks sit on top of the head skin
+        tone = tones.get(mat)
+        if tone is not None:
+            (sr_, sg_, sb_), (lr_, lg_, lb_) = tone
+            dr_, dg_, db_ = lr_ - sr_, lg_ - sg_, lb_ - sb_
         for fi, quad in enumerate(faces):
-            i0, i1, i2, i3 = quad
-            n0, n1, n2, n3 = pn[i0], pn[i1], pn[i2], pn[i3]
-            nz = n0[2] + n1[2] + n2[2] + n3[2]
+            sx_, sy_, sz_ = fsum[fi]
+            nz = sx_ * nzx + sz_ * nzz
             if nz < -0.2:                                    # facing away from the viewer
                 continue
-            nx = n0[0] + n1[0] + n2[0] + n3[0]
-            ny = n0[1] + n1[1] + n2[1] + n3[1]
-            l_ = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
-            p0, p1, p2, p3 = pv[i0], pv[i1], pv[i2], pv[i3]
-            drawlist.append(((p0[2] + p1[2] + p2[2] + p3[2]) * 0.25 + bias,
-                             [(p0[0], p0[1]), (p1[0], p1[1]), (p2[0], p2[1]), (p3[0], p3[1])],
-                             shade(mat, nx / l_, ny / l_, nz / l_, mult[fi])))
+            nx = sx_ * nxx + sz_ * nxz
+            l_ = sqrt(nx * nx + sy_ * sy_ + nz * nz) or 1.0
+            pts = []
+            zsum = 0.0
+            for idx in quad:
+                p = cp[idx]
+                if p is None:
+                    x, y, z = verts[idx]
+                    zr = x * zx + z * zz + oz_
+                    k_ = f / (D - zr)
+                    p = cp[idx] = (cx + (x * xx + z * xz + ox_) * k_, cy - ((FLOOR + (y - FLOOR) * sc) - yc) * k_)
+                    cz[idx] = zr
+                pts.append(p)
+                zsum += cz[idx]
+            nx /= l_; ny = sy_ / l_; nz /= l_
+            if tone is not None:                              # inlined skin shading: this is most of the faces
+                diff = nx * Lx + ny * Ly + nz * Lz
+                t = 0.25 + 0.85 * diff if diff > 0.0 else 0.25
+                if t > 1.0: t = 1.0
+                q_ = 1.0 - (nz if nz > 0.0 else 0.0)
+                rim = q_ * q_ * q_ * 0.132
+                hd = nx * Hx + ny * Hy + nz * Hz
+                sp = 71.4 * hd ** 24 if hd > 0.6 else 0.0
+                m_ = mult[fi]
+                r = sr_ + dr_ * t; g = sg_ + dg_ * t; b_ = sb_ + db_ * t
+                r = (r + (255 - r) * rim) * m_ + sp; g = (g + (255 - g) * rim) * m_ + sp; b_ = (b_ + (230 - b_) * rim) * m_ + sp
+                color = (255 if r > 255 else int(r), 255 if g > 255 else int(g), 255 if b_ > 255 else int(b_))
+            else:
+                color = shade(mat, nx, ny, nz, mult[fi])
+            append((zsum * 0.25 + bias, pts, color))
 
     drawlist.sort(key=lambda t: t[0])                        # far to near
+    poly = pygame.draw.polygon
     for _, pts, color in drawlist:
-        pygame.draw.polygon(screen, color, pts)
-        pygame.draw.polygon(screen, color, pts, 1)           # closes hairline gaps between faces
+        poly(screen, color, pts)
