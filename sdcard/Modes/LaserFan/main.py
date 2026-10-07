@@ -16,8 +16,23 @@ import pygame
 def clamp(v, lo=0.0, hi=1.0): return max(lo, min(hi, v))
 
 def hsv(h, s, v):
-    r, g, b = colorsys.hsv_to_rgb(h % 1.0, clamp(s), clamp(v))
-    return (int(r * 255), int(g * 255), int(b * 255))
+    """hue/saturation/value (0..1) to an (r, g, b) tuple; written out by hand because it is called thousands of times a frame"""
+    h = (h % 1.0) * 6.0
+    s = 0.0 if s < 0.0 else (1.0 if s > 1.0 else s)
+    v = 0.0 if v < 0.0 else (1.0 if v > 1.0 else v)
+    i = int(h)
+    f = h - i
+    v255 = v * 255.0
+    p = v255 * (1.0 - s)
+    q = v255 * (1.0 - f * s)
+    t = v255 * (1.0 - (1.0 - f) * s)
+    if i == 0: r, g, b = v255, t, p
+    elif i == 1: r, g, b = q, v255, p
+    elif i == 2: r, g, b = p, v255, t
+    elif i == 3: r, g, b = p, q, v255
+    elif i == 4: r, g, b = t, p, v255
+    else: r, g, b = v255, p, q
+    return (int(r), int(g), int(b))
 
 _state = {"beats": 0.0, "last": None, "canvas": None, "fade": None, "size": None}
 
@@ -50,8 +65,39 @@ def beat_clock(eyesy):
 def setup(screen, eyesy):
     pass
 
+# ---- adaptive quality: if this pattern runs slowly (say, on a Raspberry Pi) it quietly draws less detail ----
+_lod = {"q": 1.0, "avg": 0.0, "t0": 0.0, "rs": 1.0, "calm": 0}
+LOD_BUDGET = 0.016                                             # seconds of drawing per frame to stay under
+
+def lod_start():
+    _lod["t0"] = time.perf_counter()
+
+def lod_end():
+    dt = time.perf_counter() - _lod["t0"]
+    _lod["avg"] = _lod["avg"] * 0.9 + dt * 0.1 if _lod["avg"] else dt
+    if _lod["avg"] > LOD_BUDGET:
+        _lod["q"] = max(0.2, _lod["q"] - 0.04)
+    elif _lod["avg"] < LOD_BUDGET * 0.55:
+        _lod["q"] = min(1.0, _lod["q"] + 0.01)
+    _lod["calm"] = _lod["calm"] + 1 if _lod["avg"] < LOD_BUDGET * 0.4 else 0
+
+def render_scale():
+    """1.0 normally; 0.5 (a quarter of the pixels) if the machine is really struggling, until it has coped easily for ~10 seconds"""
+    if _lod["rs"] == 1.0 and _lod["q"] < 0.4:
+        _lod["rs"], _lod["calm"] = 0.5, 0
+    elif _lod["rs"] == 0.5 and _lod["calm"] > 300:
+        _lod["rs"], _lod["calm"] = 1.0, 0
+    return _lod["rs"]
+
 def draw(screen, eyesy):
-    xres, yres = eyesy.xres, eyesy.yres
+    lod_start()
+    _draw(screen, eyesy)
+    lod_end()
+
+def _draw(screen, eyesy):
+    full_x, full_y = eyesy.xres, eyesy.yres
+    rs = render_scale()                                       # 0.5 if the machine is struggling: draw a quarter of the pixels
+    xres, yres = int(full_x * rs), int(full_y * rs)
     dt, beats, frac, kick, energy = beat_clock(eyesy)
     bg = tuple(int(c) for c in eyesy.color_picker_bg(eyesy.knob5))
     if _state["size"] != (xres, yres):
@@ -65,8 +111,10 @@ def draw(screen, eyesy):
 
     fg = eyesy.color_picker(eyesy.knob4)
     h0 = colorsys.rgb_to_hsv(fg[0] / 255.0, fg[1] / 255.0, fg[2] / 255.0)[0]
+    q = _lod["q"]
     n = 3 + int(eyesy.knob3 * 21.99)
-    thick = 1 + int(eyesy.knob1 * 9) + int(energy * 6)        # turning a knob makes the beams swell
+    n = max(3, int(n * (0.5 + 0.5 * q)))                      # fewer beams when the machine is struggling
+    thick = max(1, int((1 + int(eyesy.knob1 * 9) + int(energy * 6)) * rs))   # turning a knob makes the beams swell
     amp = 0.30 + 0.45 * eyesy.knob2                            # faster tempos swing wider
     L = math.hypot(xres, yres) * 1.2
 
@@ -83,12 +131,18 @@ def draw(screen, eyesy):
             a = direction + sweep + u * spread * (1.0 if fi % 2 == 0 else -1.0)
             ex, ey = ox + L * math.cos(a), oy + L * math.sin(a)
             hue = h0 + hs * 0.4 + (i / n) * 0.35
-            pygame.draw.line(canvas, hsv(hue, 0.9, 0.5 + 0.3 * kick), (ox, oy), (ex, ey), thick + 6)      # glow
+            if q > 0.45:
+                pygame.draw.line(canvas, hsv(hue, 0.9, 0.5 + 0.3 * kick), (ox, oy), (ex, ey), thick + 6)      # glow
             pygame.draw.line(canvas, hsv(hue, 0.35, 1.0), (ox, oy), (ex, ey), thick)                      # hot core
-        pygame.draw.circle(canvas, hsv(h0 + hs * 0.4, 0.3, 1.0), (int(ox), int(oy)), int(20 + 40 * kick))   # the source flares on the beat
-    screen.blit(canvas, (0, 0))
+        pygame.draw.circle(canvas, hsv(h0 + hs * 0.4, 0.3, 1.0), (int(ox), int(oy)), int((20 + 40 * kick) * rs))   # the source flares on the beat
+    if rs == 1.0:
+        screen.blit(canvas, (0, 0))
+    else:
+        pygame.transform.scale(canvas, (full_x, full_y), screen)     # straight into the screen
     if kick > 0.6:                                            # a quick strobe on the hit
-        flash = pygame.Surface((xres, yres))
-        flash.fill((255, 255, 255))
+        flash = _state.get("flash")
+        if flash is None or flash.get_size() != (full_x, full_y):
+            flash = _state["flash"] = pygame.Surface((full_x, full_y))
+            flash.fill((255, 255, 255))
         flash.set_alpha(int(45 * (kick - 0.6) / 0.4))
         screen.blit(flash, (0, 0))

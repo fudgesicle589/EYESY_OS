@@ -36,6 +36,8 @@ def centroid(pts):
     n = float(len(pts))
     return (sum(p[0] for p in pts)/n, sum(p[1] for p in pts)/n, sum(p[2] for p in pts)/n)
 
+OUT8 = ((-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, -1), (-1, 1), (1, 1))     # the offsets that make the outline
+OUT4 = ((-2, 0), (2, 0), (0, -2), (0, 2))
 LIFT = 0.06           # how far the body sits above the wheels (ride height)
 AMBIENT = (95, 30, 150)   # purple fill light, matches the sunset
 
@@ -338,7 +340,7 @@ SUN_TOP = (150, 60, 255)
 SUN_BOT = (255, 70, 220)
 
 _bg_cache = {"key": None, "surf": None}
-_scroll = {"pos": 0.0, "dist": 0.0, "t": None}
+_scroll = {"pos": 0.0, "dist": 0.0, "t": None, "dt": None}
 _car_surf = {"size": None, "surf": None}
 
 def palette(base):
@@ -389,78 +391,98 @@ def build_background(xres, yres, base):
 def road_samples():
     """distances along the road (in car units) at which the road is sampled"""
     ss, s = [], 0.0
-    while s < 30: ss.append(s); s += 0.8
-    while s < 100: ss.append(s); s += 2.5
-    while s < 240: ss.append(s); s += 8.0
+    while s < 30: ss.append(s); s += 1.0
+    while s < 100: ss.append(s); s += 3.0
+    while s < 240: ss.append(s); s += 10.0
     return ss
 
 ROAD_S = road_samples()
+# lateral positions across the road that get projected for every sample:
+# left halo (out, in), left core (out, in), left edge, dash left/right, right edge, right core (in, out), right halo (in, out)
+def _lats(hw):
+    return (-hw - 0.24, -hw - 0.10, -hw, -hw + 0.10, -hw + 0.24, -0.07, 0.07, hw - 0.24, hw - 0.10, hw, hw + 0.10, hw + 0.24)
 
 def draw_road(screen, xres, yres, focal, S, yaw, steer, speed, pal):
     """The road starts under the car heading the way the car points, then keeps bending the same way."""
     now = time.time()
     if _scroll["t"] is not None:
-        _scroll["dist"] += speed * (now - _scroll["t"])
+        dt = min(now - _scroll["t"], 0.1)
+        _scroll["dt"] = dt if _scroll["dt"] is None else _scroll["dt"] + (dt - _scroll["dt"]) * 0.1     # frames never arrive perfectly evenly; moving by the average gap keeps the scenery from stuttering
+        _scroll["dist"] += speed * _scroll["dt"]
     _scroll["pos"] = _scroll["dist"] % 4.0
     _scroll["t"] = now
 
     ox, oy = xres / 2, yres * HORIZON
     kappa = steer * 0.006                               # extra bend per unit of road
+    sin, cos = math.sin, math.cos
     X = Z = 0.0
-    # forward: integrate the heading along the road
-    fwd = [(0.0, 0.0, 0.0, yaw)]
+    fwd = [(0.0, 0.0, 0.0, yaw)]                        # forward: integrate the heading along the road
     for s0, s1 in zip(ROAD_S, ROAD_S[1:]):
         h = clamp(yaw + kappa * (s0 + s1) / 2, -1.3, 1.3)
-        X += math.sin(h) * (s1 - s0)
-        Z += math.cos(h) * (s1 - s0)
+        X += sin(h) * (s1 - s0)
+        Z += cos(h) * (s1 - s0)
         fwd.append((s1, X, Z, h))
     s_min = -(CAM_DIST - 2.6) / S                       # back to just in front of the camera
     n_back = max(int(-s_min / 1.0), 1)
-    back = [(s_min * (1 - i / n_back), s_min * (1 - i / n_back) * math.sin(yaw),
-             s_min * (1 - i / n_back) * math.cos(yaw), yaw) for i in range(n_back)]
+    back = [(s_min * (1 - i / n_back), s_min * (1 - i / n_back) * sin(yaw),
+             s_min * (1 - i / n_back) * cos(yaw), yaw) for i in range(n_back)]
     pts = back + fwd
 
-    def pt(p, lat):
-        s, x, z, h = p
-        wx = x + math.cos(h) * lat
-        wz = z - math.sin(h) * lat
-        zc = wz * S + CAM_DIST
-        if zc < 2.5: return None
-        return (ox + wx * S * focal / zc, oy + CAM_H * focal / zc)
-
-    def quad(pa, pb, lo, hi, color):
-        a, b, c, d = pt(pa, lo), pt(pa, hi), pt(pb, hi), pt(pb, lo)
-        if a and b and c and d:
-            pygame.draw.polygon(screen, color, [a, b, c, d])
-            pygame.draw.polygon(screen, color, [a, b, c, d], 1)   # closes hairline gaps between road pieces
+    # project every sample across the road just once (neighbouring segments share their end points)
+    lats = _lats(ROAD_HW)
+    k_ = S * focal
+    rows = []
+    for (s, x, z, h) in pts:
+        ch, sh_ = cos(h), sin(h)
+        row = []
+        for lat in lats:
+            zc = (z - sh_ * lat) * S + CAM_DIST
+            if zc < 2.5:
+                row.append(None)
+            else:
+                row.append((ox + (x + ch * lat) * k_ / zc, oy + CAM_H * focal / zc))
+        rows.append(row)
 
     horizon, road = pal["horizon"], pal["road"]
-    hw = ROAD_HW
+    halo_c = lerp3(road, NEON_PINK, 0.35)
+    dash_c = (235, 130, 225)
+    poly = pygame.draw.polygon
+    q = _lod["q"]
     dash_period, dash_len = 4.0, 1.8
+    span_y = (yres - oy) * 0.55
     for i in range(len(pts) - 2, -1, -1):              # far to near
-        pa, pb = pts[i], pts[i + 1]
-        near = pt(pa, 0)
-        if not near: continue
-        f = clamp((near[1] - oy) / ((yres - oy) * 0.55)) ** 0.8
-        quad(pa, pb, -hw, hw, lerp3(horizon, road, f))
-        for sgn in (-1, 1):                            # neon edge lines with a soft halo
-            c0, c1 = sorted((sgn * (hw - 0.24), sgn * (hw + 0.24)))
-            quad(pa, pb, c0, c1, lerp3(horizon, lerp3(road, NEON_PINK, 0.35), f))
-            c0, c1 = sorted((sgn * (hw - 0.10), sgn * (hw + 0.10)))
-            quad(pa, pb, c0, c1, lerp3(horizon, NEON_PINK, f))
+        ra, rb = rows[i], rows[i + 1]
+        if ra[2] is None or ra[9] is None or rb[2] is None or rb[9] is None:
+            continue
+        f = clamp(((ra[5] or ra[2])[1] - oy) / span_y) ** 0.8
+        # the far end of every piece is nudged up a pixel so neighbouring pieces overlap: no hairline gaps, no outline pass
+        def quad(ia, ib, color):
+            a, b, c, d = ra[ia], ra[ib], rb[ib], rb[ia]
+            if a and b and c and d:
+                poly(screen, color, [a, b, (c[0], c[1] - 1.0), (d[0], d[1] - 1.0)])
+        quad(2, 9, lerp3(horizon, road, f))
+        if q > 0.45:
+            hc = lerp3(horizon, halo_c, f)
+            quad(0, 4, hc)
+            quad(7, 11, hc)
+        cc = lerp3(horizon, NEON_PINK, f)
+        quad(1, 3, cc)
+        quad(8, 10, cc)
         # centre dashes, clipped to this segment
-        s0, s1 = pa[0], pb[0]
-        k = math.floor((s0 + _scroll["pos"]) / dash_period)
-        while True:
-            a = k * dash_period - _scroll["pos"]
-            if a >= s1: break
-            lo, hi = max(a, s0), min(a + dash_len, s1)
-            if hi > lo:
-                t0, t1 = (lo - s0) / (s1 - s0), (hi - s0) / (s1 - s0)
-                pm = (0, lerp(pa[1], pb[1], t0), lerp(pa[2], pb[2], t0), pa[3])
-                pn = (0, lerp(pa[1], pb[1], t1), lerp(pa[2], pb[2], t1), pa[3])
-                quad(pm, pn, -0.07, 0.07, lerp3(horizon, (235, 130, 225), f))
-            k += 1
+        s0, s1 = pts[i][0], pts[i + 1][0]
+        if ra[5] and ra[6] and rb[5] and rb[6]:
+            k = math.floor((s0 + _scroll["pos"]) / dash_period)
+            dcol = lerp3(horizon, dash_c, f)
+            while True:
+                a = k * dash_period - _scroll["pos"]
+                if a >= s1: break
+                lo, hi = max(a, s0), min(a + dash_len, s1)
+                if hi > lo:
+                    t0, t1 = (lo - s0) / (s1 - s0), (hi - s0) / (s1 - s0)
+                    l0 = (lerp(ra[5][0], rb[5][0], t0), lerp(ra[5][1], rb[5][1], t0)); r0 = (lerp(ra[6][0], rb[6][0], t0), lerp(ra[6][1], rb[6][1], t0))
+                    l1 = (lerp(ra[5][0], rb[5][0], t1), lerp(ra[5][1], rb[5][1], t1) - 1.0); r1 = (lerp(ra[6][0], rb[6][0], t1), lerp(ra[6][1], rb[6][1], t1) - 1.0)
+                    poly(screen, dcol, [l0, r0, r1, l1])
+                k += 1
     return pts
 
 # ---------- palm trees: same neon gradient and cut-out stripes as the sun ----------
@@ -563,19 +585,33 @@ def palm_trees(pts, xres, yres, focal, S):
     out.sort(key=lambda t: -t[0])
     return out
 
+_tree_cache = {"key": None, "imgs": {}}
+
 def blit_tree(screen, t, tint):
     zc, pw, ph, bx, by, alpha = t
-    pw, ph = max(pw, 2), max(ph, 2)
-    src = _palm["sprite"][0]
-    for m in _palm["sprite"]:                        # smallest version that is still at least as big as needed
-        if m.get_width() >= pw and m.get_height() >= ph: src = m
-    if pw > src.get_width() or ph > src.get_height():
-        img = pygame.transform.scale(src, (pw, ph))  # only ever a small enlargement
-    else:
-        img = pygame.transform.smoothscale(src, (pw, ph))
-    # colour and fade in one go, by multiplying the per-pixel colour and alpha
-    img.fill((tint[0], tint[1], tint[2], alpha), special_flags=pygame.BLEND_RGBA_MULT)
-    screen.blit(img, (int(bx - pw / 2), int(by - ph)))
+    tq = (tint[0] >> 4, tint[1] >> 4, tint[2] >> 4)
+    if _tree_cache["key"] != tq:                   # the colour changed: start the cache afresh
+        _tree_cache["key"] = tq
+        _tree_cache["imgs"] = {}
+    imgs = _tree_cache["imgs"]
+    hh = max(4, ph)                                # exact pixel height, so a tree grows smoothly instead of popping between sizes
+    aq = min(5, alpha * 6 // 256)
+    img = imgs.get((hh, aq))
+    if img is None:
+        if len(imgs) > 150:                        # never let the cache grow without limit
+            imgs.clear()
+        ww = max(2, int(hh * PALM_W / PALM_H))
+        src = _palm["sprite"][0]
+        for m in _palm["sprite"]:                  # smallest version that is still at least as big as needed
+            if m.get_width() >= ww and m.get_height() >= hh: src = m
+        if ww > src.get_width() or hh > src.get_height():
+            img = pygame.transform.scale(src, (ww, hh))
+        else:
+            img = pygame.transform.smoothscale(src, (ww, hh))
+        a_ = int(40 + (aq + 0.5) * 36)
+        img.fill((tq[0] * 16 + 8, tq[1] * 16 + 8, tq[2] * 16 + 8, min(255, a_)), special_flags=pygame.BLEND_RGBA_MULT)
+        imgs[(hh, aq)] = img
+    screen.blit(img, (int(bx - img.get_width() / 2), int(by - img.get_height())))
 
 # ---------- clouds: flat-bottomed neon clouds with sun-style stripes, tinted by the decal colour ----------
 CLOUD_W, CLOUD_H = 480, 150
@@ -618,19 +654,29 @@ def build_cloud(kind):
     grad.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
     return grad
 
+_cloud_cache = {"key": None, "imgs": []}
+
 def draw_clouds(screen, xres, yres, tint):
     if not _cloud_sprites:
         for kind in (0, 1, 2):
             _cloud_sprites[kind] = build_cloud(kind)
+    tq = (tint[0] >> 4, tint[1] >> 4, tint[2] >> 4)
+    key = (xres, yres, tq)
+    if _cloud_cache["key"] != key:                 # scale and tint the clouds only when the size or colour changes
+        imgs = []
+        for kind, x0, yb, wf, drift, opacity in CLOUDS:
+            w = int(xres * wf)
+            h = int(w * CLOUD_H / CLOUD_W)
+            img = pygame.transform.smoothscale(_cloud_sprites[kind], (w, h))
+            img.fill((tq[0] * 16 + 8, tq[1] * 16 + 8, tq[2] * 16 + 8, int(255 * opacity)), special_flags=pygame.BLEND_RGBA_MULT)
+            imgs.append(img)
+        _cloud_cache["key"], _cloud_cache["imgs"] = key, imgs
     now = time.time()
-    for kind, x0, yb, wf, drift, opacity in CLOUDS:
-        w = int(xres * wf)
-        h = int(w * CLOUD_H / CLOUD_W)
+    for img, (kind, x0, yb, wf, drift, opacity) in zip(_cloud_cache["imgs"], CLOUDS):
+        w, h = img.get_size()
         span = xres + w
         x = (x0 * span + now * 6.0 * drift * xres / 1280.0) % span - w
         y = int(yres * yb - h * CLOUD_BASE / CLOUD_H)
-        img = pygame.transform.smoothscale(_cloud_sprites[kind], (w, h))
-        img.fill((tint[0], tint[1], tint[2], int(255 * opacity)), special_flags=pygame.BLEND_RGBA_MULT)
         screen.blit(img, (int(x), y))
 
 # ============================== mode ==============================
@@ -638,7 +684,36 @@ def draw_clouds(screen, xres, yres, tint):
 def setup(screen, eyesy):
     pass
 
+# ---- adaptive quality: if this pattern runs slowly (say, on a Raspberry Pi) it quietly draws less detail ----
+_lod = {"q": 1.0, "avg": 0.0, "t0": 0.0, "rs": 1.0, "calm": 0}
+LOD_BUDGET = 0.016                                             # seconds of drawing per frame to stay under
+
+def lod_start():
+    _lod["t0"] = time.perf_counter()
+
+def lod_end():
+    dt = time.perf_counter() - _lod["t0"]
+    _lod["avg"] = _lod["avg"] * 0.9 + dt * 0.1 if _lod["avg"] else dt
+    if _lod["avg"] > LOD_BUDGET:
+        _lod["q"] = max(0.2, _lod["q"] - 0.04)
+    elif _lod["avg"] < LOD_BUDGET * 0.55:
+        _lod["q"] = min(1.0, _lod["q"] + 0.01)
+    _lod["calm"] = _lod["calm"] + 1 if _lod["avg"] < LOD_BUDGET * 0.4 else 0
+
+def render_scale():
+    """1.0 normally; 0.5 (a quarter of the pixels) if the machine is really struggling, until it has coped easily for ~10 seconds"""
+    if _lod["rs"] == 1.0 and _lod["q"] < 0.4:
+        _lod["rs"], _lod["calm"] = 0.5, 0
+    elif _lod["rs"] == 0.5 and _lod["calm"] > 300:
+        _lod["rs"], _lod["calm"] = 1.0, 0
+    return _lod["rs"]
+
 def draw(screen, eyesy):
+    lod_start()
+    _draw(screen, eyesy)
+    lod_end()
+
+def _draw(screen, eyesy):
     xres, yres = eyesy.xres, eyesy.yres
 
     # ---- knobs ----
@@ -678,53 +753,67 @@ def draw(screen, eyesy):
     for t in trees:                                # trees behind the car go under it
         if t[0] >= CAM_DIST: blit_tree(screen, t, decal)
 
-    # ---- ground shadow ----
+    # ---- ground shadow (a plain dark shape: no temporary surface to allocate every frame) ----
     sh = [project(to_cam(p)) for p in [(-1.4, 0, -2.3), (1.4, 0, -2.3), (1.4, 0, 2.3), (-1.4, 0, 2.3)]]
-    x0, x1 = int(min(p[0] for p in sh)) - 2, int(max(p[0] for p in sh)) + 2
-    y0, y1 = int(min(p[1] for p in sh)) - 2, int(max(p[1] for p in sh)) + 2
-    x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, xres), min(y1, yres)
-    if x1 > x0 and y1 > y0:
-        ov = pygame.Surface((x1 - x0, y1 - y0), pygame.SRCALPHA)
-        pygame.draw.polygon(ov, (0, 0, 0, 120), [(p[0] - x0, p[1] - y0) for p in sh])
-        screen.blit(ov, (x0, y0))
+    pygame.draw.polygon(screen, (9, 6, 15), sh)
 
-    # ---- draw the car onto its own transparent layer ----
+    # ---- draw the car onto its own transparent layer (only the part of it used last frame is cleared) ----
     if _car_surf["size"] != (xres, yres):
         _car_surf["size"] = (xres, yres)
         _car_surf["surf"] = pygame.Surface((xres, yres), pygame.SRCALPHA)
+        _car_surf["dirty"] = None
     car = _car_surf["surf"]
-    car.fill((0, 0, 0, 0))
+    if _car_surf.get("dirty") is None:
+        car.fill((0, 0, 0, 0))
+    else:
+        car.fill((0, 0, 0, 0), _car_surf["dirty"])
     bb = [xres, yres, 0, 0]
+    two_pass = _lod["q"] > 0.6                       # a same-colour edge pass closes hairline cracks between faces
+    poly_draw = pygame.draw.polygon
+
+    def proj_pts(pts3, lift):
+        """project model-space points to the screen (rotation, scale, camera and perspective in one go)"""
+        out = []
+        for x, y, z in pts3:
+            Z = (-x * sn + z * cs) * S + CAM_DIST
+            k = focal / Z
+            out.append((ox + (x * cs + z * sn) * S * k, oy - ((y + lift) * S - CAM_H) * k))
+        return out
 
     def visible(face, lift):
         c = to_cam(face.c, lift)
         n = rot(face.n)
         return (c, n) if dot(n, c) < 0 else None
 
-    def fill(poly, color):
-        pygame.draw.polygon(car, color, poly)
-        pygame.draw.polygon(car, color, poly, 1)   # same-colour edge closes hairline cracks between faces
-
     def paint(face, n, lift):
         k = 0.5 + 0.5 * max(0.0, dot(n, LIGHT))
-        poly = [project(to_cam(p, lift)) for p in face.pts]
+        poly = proj_pts(face.pts, lift)
         for x, y in poly:
             if x < bb[0]: bb[0] = x
             if y < bb[1]: bb[1] = y
             if x > bb[2]: bb[2] = x
             if y > bb[3]: bb[3] = y
-        fill(poly, shade(colors[face.ckey], k))
+        color = shade(colors[face.ckey], k)
+        poly_draw(car, color, poly)
+        if two_pass:
+            poly_draw(car, color, poly, 1)
         for pts, ckey, emissive in face.decals:
-            dpoly = [project(to_cam(p, lift)) for p in pts]
-            fill(dpoly, colors[ckey] if emissive else shade(colors[ckey], k))
+            dpoly = proj_pts(pts, lift)
+            dcol = colors[ckey] if emissive else shade(colors[ckey], k)
+            poly_draw(car, dcol, dpoly)
+            if two_pass:
+                poly_draw(car, dcol, dpoly, 1)
 
-    def draw_faces(faces, lift):
+    def visible_sorted(faces, lift):
         vis = []
         for f in faces:
             if f is None: continue
             v = visible(f, lift)
             if v: vis.append((dot(v[0], v[0]), f, v[1]))
         vis.sort(key=lambda t: -t[0])              # far to near
+        return vis
+
+    def paint_all(vis, lift):
         for _, f, n in vis:
             paint(f, n, lift)
 
@@ -740,19 +829,18 @@ def draw(screen, eyesy):
             c = to_cam(a["center"], a["lift"])
             return dot(c, c)
         return sorted(group, key=lambda a: -dist2(a))
-    for a in far_to_near(behind): draw_faces(a["faces"], a["lift"])
-    draw_faces(BODY, LIFT)
+    for a in far_to_near(behind): paint_all(visible_sorted(a["faces"], a["lift"]), a["lift"])
+    body_vis = visible_sorted(BODY, LIFT)            # worked out once, then reused for every wheel below
+    paint_all(body_vis, LIFT)
     for a in far_to_near(front):
-        draw_faces(a["faces"], a["lift"])
+        paint_all(visible_sorted(a["faces"], a["lift"]), a["lift"])
         if a.get("is_wheel"):
             # body panels that are clearly closer to the camera than this wheel (the tail, the rear
             # fender) sit in front of it, so paint them again on top of the wheel
             c = to_cam(a["center"], a["lift"])
             wheel_dist = math.sqrt(dot(c, c))
-            def nearer(f):
-                fc = to_cam(f.c, LIFT)
-                return math.sqrt(dot(fc, fc)) < wheel_dist - a["radius"]
-            draw_faces([f for f in BODY if f is not None and nearer(f)], LIFT)
+            limit = (wheel_dist - a["radius"]) ** 2 if wheel_dist > a["radius"] else -1.0
+            paint_all([v for v in body_vis if v[0] < limit], LIFT)
 
     # ---- outline only the outside edge of the car ----
     pad = 4
@@ -761,11 +849,10 @@ def draw(screen, eyesy):
     if rw > 0 and rh > 0:
         crop = car.subsurface((rx, ry, rw, rh))
         sil = pygame.mask.from_surface(crop).to_surface(setcolor=OUTLINE + (255,), unsetcolor=(0, 0, 0, 0))
-        t = 2
-        for dx in range(-t, t + 1):
-            for dy in range(-t, t + 1):
-                if (dx or dy) and dx*dx + dy*dy <= t*t + 1:
-                    screen.blit(sil, (rx + dx, ry + dy))
+        offsets = OUT8 if _lod["q"] > 0.5 else OUT4
+        for dx, dy in offsets:
+            screen.blit(sil, (rx + dx, ry + dy))
         screen.blit(crop, (rx, ry))
+        _car_surf["dirty"] = pygame.Rect(rx, ry, rw, rh)
     for t in trees:                                # trees between the camera and the car go over it
         if t[0] < CAM_DIST: blit_tree(screen, t, decal)

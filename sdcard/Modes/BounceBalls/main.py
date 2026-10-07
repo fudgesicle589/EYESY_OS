@@ -20,8 +20,23 @@ def clamp(v, lo=0.0, hi=1.0): return max(lo, min(hi, v))
 def ease(t): return t * t * (3 - 2 * t)
 
 def hsv(h, s, v):
-    r, g, b = colorsys.hsv_to_rgb(h % 1.0, clamp(s), clamp(v))
-    return (int(r * 255), int(g * 255), int(b * 255))
+    """hue/saturation/value (0..1) to an (r, g, b) tuple; written out by hand because it is called thousands of times a frame"""
+    h = (h % 1.0) * 6.0
+    s = 0.0 if s < 0.0 else (1.0 if s > 1.0 else s)
+    v = 0.0 if v < 0.0 else (1.0 if v > 1.0 else v)
+    i = int(h)
+    f = h - i
+    v255 = v * 255.0
+    p = v255 * (1.0 - s)
+    q = v255 * (1.0 - f * s)
+    t = v255 * (1.0 - (1.0 - f) * s)
+    if i == 0: r, g, b = v255, t, p
+    elif i == 1: r, g, b = q, v255, p
+    elif i == 2: r, g, b = p, v255, t
+    elif i == 3: r, g, b = p, q, v255
+    elif i == 4: r, g, b = t, p, v255
+    else: r, g, b = v255, p, q
+    return (int(r), int(g), int(b))
 
 _state = {"beats": 0.0, "last": None, "prev": None, "energy": 0.0, "canvas": None, "fade": None, "size": None, "aux": {}}
 

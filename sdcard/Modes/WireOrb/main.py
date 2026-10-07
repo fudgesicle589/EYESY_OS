@@ -20,8 +20,23 @@ def clamp(v, lo=0.0, hi=1.0): return max(lo, min(hi, v))
 def ease(t): return t * t * (3 - 2 * t)
 
 def hsv(h, s, v):
-    r, g, b = colorsys.hsv_to_rgb(h % 1.0, clamp(s), clamp(v))
-    return (int(r * 255), int(g * 255), int(b * 255))
+    """hue/saturation/value (0..1) to an (r, g, b) tuple; written out by hand because it is called thousands of times a frame"""
+    h = (h % 1.0) * 6.0
+    s = 0.0 if s < 0.0 else (1.0 if s > 1.0 else s)
+    v = 0.0 if v < 0.0 else (1.0 if v > 1.0 else v)
+    i = int(h)
+    f = h - i
+    v255 = v * 255.0
+    p = v255 * (1.0 - s)
+    q = v255 * (1.0 - f * s)
+    t = v255 * (1.0 - (1.0 - f) * s)
+    if i == 0: r, g, b = v255, t, p
+    elif i == 1: r, g, b = q, v255, p
+    elif i == 2: r, g, b = p, v255, t
+    elif i == 3: r, g, b = p, q, v255
+    elif i == 4: r, g, b = t, p, v255
+    else: r, g, b = v255, p, q
+    return (int(r), int(g), int(b))
 
 _state = {"beats": 0.0, "last": None, "prev": None, "energy": 0.0, "canvas": None, "fade": None, "size": None, "aux": {}}
 
@@ -58,9 +73,9 @@ def colors(eyesy):
     bg = hsv(h0 + 0.55, 0.65, 0.10)                            # knob 5 is used for something more fun than the background
     return h0, bg
 
-def canvas_for(eyesy, bg, alpha):
+def canvas_for(eyesy, bg, alpha, size=None):
     """a persistent surface that fades toward the background each frame, for glowing trails"""
-    xres, yres = eyesy.xres, eyesy.yres
+    xres, yres = size or (eyesy.xres, eyesy.yres)
     if _state["size"] != (xres, yres):
         _state["size"] = (xres, yres)
         _state["canvas"] = pygame.Surface((xres, yres))
@@ -74,46 +89,132 @@ def canvas_for(eyesy, bg, alpha):
 def setup(screen, eyesy):
     pass
 
+# ---- adaptive quality: if this pattern runs slowly (say, on a Raspberry Pi) it quietly draws less detail ----
+_lod = {"q": 1.0, "avg": 0.0, "t0": 0.0, "rs": 1.0, "calm": 0}
+LOD_BUDGET = 0.016                                             # seconds of drawing per frame to stay under
+
+def lod_start():
+    _lod["t0"] = time.perf_counter()
+
+def lod_end():
+    dt = time.perf_counter() - _lod["t0"]
+    _lod["avg"] = _lod["avg"] * 0.9 + dt * 0.1 if _lod["avg"] else dt
+    if _lod["avg"] > LOD_BUDGET:
+        _lod["q"] = max(0.2, _lod["q"] - 0.04)
+    elif _lod["avg"] < LOD_BUDGET * 0.55:
+        _lod["q"] = min(1.0, _lod["q"] + 0.01)
+    _lod["calm"] = _lod["calm"] + 1 if _lod["avg"] < LOD_BUDGET * 0.4 else 0
+
+def render_scale():
+    """1.0 normally; 0.5 (a quarter of the pixels) if the machine is really struggling, until it has coped easily for ~10 seconds"""
+    if _lod["rs"] == 1.0 and _lod["q"] < 0.4:
+        _lod["rs"], _lod["calm"] = 0.5, 0
+    elif _lod["rs"] == 0.5 and _lod["calm"] > 300:
+        _lod["rs"], _lod["calm"] = 1.0, 0
+    return _lod["rs"]
+
 def draw(screen, eyesy):
-    xres, yres = eyesy.xres, eyesy.yres
+    lod_start()
+    _draw(screen, eyesy)
+    lod_end()
+
+_ring_cols = {"h0": None, "d": {}}
+_trig_tab = {}
+
+def _trig(n):
+    t = _trig_tab.get(n)
+    if t is None:
+        t = _trig_tab[n] = ([math.cos(2 * math.pi * s / n) for s in range(n + 1)], [math.sin(2 * math.pi * s / n) for s in range(n + 1)])
+    return t
+
+def _ring_color(h0, hue, cls):
+    """the colour of a ring at one of four depth levels; kept until the colour knob moves"""
+    key = round(h0, 2)
+    if _ring_cols["h0"] != key:
+        _ring_cols["h0"], _ring_cols["d"] = key, {}
+    ck = (round(hue, 3), cls)
+    c = _ring_cols["d"].get(ck)
+    if c is None:
+        depth = (cls + 0.5) / 4.0
+        c = _ring_cols["d"][ck] = hsv(hue, 0.85 - 0.3 * depth, 0.25 + 0.75 * depth)
+    return c
+
+def _draw(screen, eyesy):
+    full_x, full_y = eyesy.xres, eyesy.yres
+    rs = render_scale()                                       # 0.5 if the machine is struggling: draw a quarter of the pixels
+    xres, yres = int(full_x * rs), int(full_y * rs)
     dt, beats, frac, kick, energy = beat_clock(eyesy)
     h0, bg = colors(eyesy)
-    canvas = canvas_for(eyesy, bg, 75)
+    canvas = canvas_for(eyesy, bg, 75, (xres, yres))
+    q = _lod["q"]
     n = 4 + int(eyesy.knob3 * 12.99)
+    n = max(4, int(n * (0.6 + 0.4 * q)))
+    segs = 40 if q > 0.7 else 24
     R = min(xres, yres) * 0.42 * (0.35 + eyesy.knob1 * 0.85) * (1.0 + 0.12 * kick)
     ay = (math.floor(beats) + ease(clamp(frac * 1.5))) * math.pi / 4 + beats * 0.05 + energy * 0.6 * math.sin(beats * 6)
     ax = 0.45 + 0.25 * math.sin(beats * 0.2)
     ca, sa, cx_, sx_ = math.cos(ay), math.sin(ay), math.cos(ax), math.sin(ax)
     cx, cy = xres / 2.0, yres / 2.0
-    F = 3.2
-    D = 4.0
+    F, D = 3.2, 4.0
+    kk = R * F * 0.75
     lump = 0.5 * eyesy.knob5
+    b1, b2 = beats * 1.5, beats * 0.7                            # the lumps drift over time
+    cb1, sb1, cb2, sb2 = math.cos(b1), math.sin(b1), math.cos(b2), math.sin(b2)
+    ct, st = _trig(segs)
+    lines = pygame.draw.lines
+    sqrt = math.sqrt
+
     def project(x, y, z):
-        lon, lat = math.atan2(z, x), math.asin(clamp(y, -1.0, 1.0))
-        fr = 1.0 + lump * math.sin(3 * lon + beats * 1.5) * math.cos(2 * lat + beats * 0.7)      # a lumpy, breathing surface
-        x, y, z = x * fr, y * fr, z * fr
+        if lump > 0.005:                                         # a lumpy, breathing surface (worked out without any trig calls)
+            rho2 = x * x + z * z
+            if rho2 > 1e-8:
+                rho = sqrt(rho2)
+                cl, sl = x / rho, z / rho
+                s3 = 3 * sl - 4 * sl * sl * sl                  # sin(3 * longitude)
+                c3 = 4 * cl * cl * cl - 3 * cl                  # cos(3 * longitude)
+                c2l = 1 - 2 * y * y                             # cos(2 * latitude)
+                s2l = 2 * y * rho                               # sin(2 * latitude)
+                fr = 1.0 + lump * (s3 * cb1 + c3 * sb1) * (c2l * cb2 - s2l * sb2)
+                x, y, z = x * fr, y * fr, z * fr
         x2, z2 = x * ca + z * sa, -x * sa + z * ca
         y2, z3 = y * cx_ - z2 * sx_, y * sx_ + z2 * cx_
-        d = D + z3
-        return cx + R * x2 * F / d * 0.75, cy + R * y2 * F / d * 0.75, z3
-    segs = 40
-    for kind in (0, 1):                                       # 0: rings of latitude, 1: rings of longitude
+        k = kk / (D + z3)
+        return cx + x2 * k, cy + y2 * k, z3
+
+    for kind in (0, 1):                                          # 0: rings of latitude, 1: rings of longitude
         for r in range(n):
             u = (r + 0.5) / n
-            pts = []
-            for s in range(segs + 1):
-                t = 2 * math.pi * s / segs
-                if kind == 0:
-                    phi = math.pi * u
-                    p = project(math.sin(phi) * math.cos(t), math.cos(phi), math.sin(phi) * math.sin(t))
-                else:
-                    th = math.pi * u
-                    p = project(math.cos(t) * math.cos(th), math.sin(t), math.cos(t) * math.sin(th))
-                pts.append(p)
+            hue = h0 + u * 0.4 + kind * 0.5
+            pts, zs = [], []
+            if kind == 0:
+                phi = math.pi * u
+                sp, cp = math.sin(phi), math.cos(phi)
+                for s in range(segs + 1):
+                    px, py, pz = project(sp * ct[s], cp, sp * st[s])
+                    pts.append((px, py)); zs.append(pz)
+            else:
+                th = math.pi * u
+                cth, sth = math.cos(th), math.sin(th)
+                for s in range(segs + 1):
+                    px, py, pz = project(ct[s] * cth, st[s], ct[s] * sth)
+                    pts.append((px, py)); zs.append(pz)
+            # draw each ring as a few long runs of one shade (dim at the back, bright at the front) instead of one line per piece
+            run, cls_run = [pts[0]], None
             for s in range(segs):
-                z = (pts[s][2] + pts[s + 1][2]) / 2.0
-                depth = 0.5 + 0.5 * z                       # brighter toward the viewer
-                col = hsv(h0 + u * 0.4 + kind * 0.5, 0.85 - 0.3 * depth, 0.25 + 0.75 * depth)
-                pygame.draw.line(canvas, col, pts[s][:2], pts[s + 1][:2], 2 if depth > 0.5 else 1)
-    pygame.draw.circle(canvas, hsv(h0 + 0.5, 0.4, 1.0), (int(cx), int(cy)), int(6 + 10 * kick))
-    screen.blit(canvas, (0, 0))
+                z = (zs[s] + zs[s + 1]) * 0.5
+                cls = int((z + 1.0) * 2.0)
+                cls = 0 if cls < 0 else (3 if cls > 3 else cls)
+                if cls_run is None:
+                    cls_run = cls
+                if cls != cls_run:
+                    if len(run) > 1:
+                        lines(canvas, _ring_color(h0, hue, cls_run), False, run, 2 if cls_run >= 2 else 1)
+                    run, cls_run = [pts[s]], cls
+                run.append(pts[s + 1])
+            if len(run) > 1:
+                lines(canvas, _ring_color(h0, hue, cls_run), False, run, 2 if cls_run >= 2 else 1)
+    pygame.draw.circle(canvas, hsv(h0 + 0.5, 0.4, 1.0), (int(cx), int(cy)), max(2, int((6 + 10 * kick) * rs)))
+    if rs == 1.0:
+        screen.blit(canvas, (0, 0))
+    else:
+        pygame.transform.scale(canvas, (full_x, full_y), screen)     # straight into the screen

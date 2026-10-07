@@ -10,6 +10,13 @@
 #   knob3 = extra detail    (number of rays, 6 to 48)
 #   knob4 = foreground color (hue of the rays)
 #   knob5 = bonus control    (curl: bend the rays into a pinwheel spiral)
+#
+# Playing it (how you turn a knob changes the picture, not just where it ends up):
+#   knob1       -> the core swells past its size and relaxes back
+#   flick knob2 -> the whole burst whips round, then settles back onto the beat
+#   knob3       -> the inner burst spins hard against the outer one
+#   knob4       -> the rays split into a rainbow and the colors slam round
+#   knob5       -> the pinwheel curl whips tighter, then eases back
 import colorsys
 import math
 import random
@@ -20,8 +27,23 @@ def clamp(v, lo=0.0, hi=1.0): return max(lo, min(hi, v))
 def ease(t): return t * t * (3 - 2 * t)
 
 def hsv(h, s, v):
-    r, g, b = colorsys.hsv_to_rgb(h % 1.0, clamp(s), clamp(v))
-    return (int(r * 255), int(g * 255), int(b * 255))
+    """hue/saturation/value (0..1) to an (r, g, b) tuple; written out by hand because it is called thousands of times a frame"""
+    h = (h % 1.0) * 6.0
+    s = 0.0 if s < 0.0 else (1.0 if s > 1.0 else s)
+    v = 0.0 if v < 0.0 else (1.0 if v > 1.0 else v)
+    i = int(h)
+    f = h - i
+    v255 = v * 255.0
+    p = v255 * (1.0 - s)
+    q = v255 * (1.0 - f * s)
+    t = v255 * (1.0 - (1.0 - f) * s)
+    if i == 0: r, g, b = v255, t, p
+    elif i == 1: r, g, b = q, v255, p
+    elif i == 2: r, g, b = p, v255, t
+    elif i == 3: r, g, b = p, q, v255
+    elif i == 4: r, g, b = t, p, v255
+    else: r, g, b = v255, p, q
+    return (int(r), int(g), int(b))
 
 _state = {"beats": 0.0, "last": None, "prev": None, "energy": 0.0, "canvas": None, "fade": None, "size": None, "aux": {}}
 
@@ -33,6 +55,7 @@ def beat_clock(eyesy):
         _state["last"] = now
     dt = min(now - _state["last"], 0.1)
     _state["last"] = now
+    knob_play(eyesy, dt)
     bpm = 30 + eyesy.knob2 * 90
     _state["beats"] += dt * bpm / 60.0
     if getattr(eyesy, "trig", False):
@@ -71,22 +94,45 @@ def canvas_for(eyesy, bg, alpha):
     _state["canvas"].blit(_state["fade"], (0, 0))
     return _state["canvas"]
 
+# ---- playing the knobs: HOW a knob is being turned matters as much as where it sits ----
+_play = {"prev": None, "vel": [0.0] * 5, "env": [0.0] * 5, "mom": [0.0] * 5}
+
+def knob_play(eyesy, dt):
+    """returns (vel, env, mom), one number per knob:
+    vel = how fast and which way it is turning (per second, smoothed)
+    env = 0..1 'being played' level; a flick jumps it to 1 and it rings out over about a second
+    mom = swing: each turn adds a kick that unwinds over about a second, so a flick overshoots and settles back"""
+    ks = (eyesy.knob1, eyesy.knob2, eyesy.knob3, eyesy.knob4, eyesy.knob5)
+    prev = _play["prev"]
+    _play["prev"] = ks
+    vel, env, mom = _play["vel"], _play["env"], _play["mom"]
+    ring, unwind = math.exp(-dt * 3.0), math.exp(-dt * 1.4)
+    for i in range(5):
+        delta = 0.0 if prev is None else ks[i] - prev[i]
+        raw = delta / dt if dt > 0 else 0.0
+        vel[i] += (raw - vel[i]) * min(1.0, dt * 15.0)
+        env[i] = max(env[i] * ring, min(1.0, abs(vel[i]) / 1.2))
+        mom[i] = mom[i] * unwind + delta
+    return vel, env, mom
+
 def setup(screen, eyesy):
     pass
 
 def draw(screen, eyesy):
     xres, yres = eyesy.xres, eyesy.yres
     dt, beats, frac, kick, energy = beat_clock(eyesy)
+    vel, env, mom = _play["vel"], _play["env"], _play["mom"]
     h0, bg = colors(eyesy)
+    h0 += mom[3] * 2.0                                         # knob 4 slams the colors round while you turn it
     screen.fill(bg)
     cx, cy = xres / 2.0, yres / 2.0
     far = math.hypot(xres, yres)
     rays = 2 * (3 + int(eyesy.knob3 * 21.99))                 # an even number, 6..48
     wedge = 2 * math.pi / rays
     step = ease(clamp(frac * 1.4))
-    rot = (math.floor(beats) + step) * wedge + energy * 0.5 * math.sin(beats * 4)
+    rot = (math.floor(beats) + step) * wedge + mom[1] * 7.0 + env[1] * 0.4 * math.sin(beats * 4)     # flick knob 2 and the burst whips round, then settles back onto the beat
     light = hsv(h0, 0.85, 0.95)
-    curl = eyesy.knob5 * 3.2                                  # how far the rays bend by the time they reach the edge
+    curl = eyesy.knob5 * 3.2 + mom[4] * 9.0                                  # how far the rays bend by the time they reach the edge
     for i in range(0, rays, 2):                               # the big rays: every other wedge
         a = rot + i * wedge
         left, right = [], []
@@ -95,10 +141,11 @@ def draw(screen, eyesy):
             off = curl * fr * fr
             left.append((cx + far * fr * math.cos(a + off), cy + far * fr * math.sin(a + off)))
             right.append((cx + far * fr * math.cos(a + wedge + off), cy + far * fr * math.sin(a + wedge + off)))
-        pygame.draw.polygon(screen, light, [(cx, cy)] + left + right[::-1])
-    r1 = min(xres, yres) * (0.16 + 0.22 * eyesy.knob1) * (1.0 + 0.10 * kick)
+        ray = hsv(h0 + (i // 2) * 0.03 * env[3], 0.85, 0.95) if env[3] > 0.02 else light      # the rays split into a rainbow while knob 4 is played
+        pygame.draw.polygon(screen, ray, [(cx, cy)] + left + right[::-1])
+    r1 = min(xres, yres) * (0.16 + 0.22 * eyesy.knob1) * (1.0 + 0.10 * kick) * (1.0 + clamp(mom[0] * 2.5, -0.4, 0.9))     # knob 1 swells the core past its size and relaxes
     pygame.draw.circle(screen, bg, (int(cx), int(cy)), int(r1 * 1.08))                 # a clean disc for the inner burst
-    rot2 = -rot * 1.5
+    rot2 = -rot * 1.5 + mom[2] * 10.0                          # knob 3 spins the inner burst against the outer one
     alt = hsv(h0 + 0.5, 0.75, 0.95)
     for i in range(0, rays, 2):                               # the inner burst turns the other way
         a = rot2 + i * wedge

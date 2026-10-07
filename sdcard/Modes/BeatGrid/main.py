@@ -15,8 +15,23 @@ import pygame
 def clamp(v, lo=0.0, hi=1.0): return max(lo, min(hi, v))
 
 def hsv(h, s, v):
-    r, g, b = colorsys.hsv_to_rgb(h % 1.0, clamp(s), clamp(v))
-    return (int(r * 255), int(g * 255), int(b * 255))
+    """hue/saturation/value (0..1) to an (r, g, b) tuple; written out by hand because it is called thousands of times a frame"""
+    h = (h % 1.0) * 6.0
+    s = 0.0 if s < 0.0 else (1.0 if s > 1.0 else s)
+    v = 0.0 if v < 0.0 else (1.0 if v > 1.0 else v)
+    i = int(h)
+    f = h - i
+    v255 = v * 255.0
+    p = v255 * (1.0 - s)
+    q = v255 * (1.0 - f * s)
+    t = v255 * (1.0 - (1.0 - f) * s)
+    if i == 0: r, g, b = v255, t, p
+    elif i == 1: r, g, b = q, v255, p
+    elif i == 2: r, g, b = p, v255, t
+    elif i == 3: r, g, b = p, q, v255
+    elif i == 4: r, g, b = t, p, v255
+    else: r, g, b = v255, p, q
+    return (int(r), int(g), int(b))
 
 _state = {"beats": 0.0, "last": None}
 
@@ -50,7 +65,36 @@ def beat_clock(eyesy):
 def setup(screen, eyesy):
     pass
 
+# ---- adaptive quality: if this pattern runs slowly (say, on a Raspberry Pi) it quietly draws less detail ----
+_lod = {"q": 1.0, "avg": 0.0, "t0": 0.0, "rs": 1.0, "calm": 0}
+LOD_BUDGET = 0.016                                             # seconds of drawing per frame to stay under
+
+def lod_start():
+    _lod["t0"] = time.perf_counter()
+
+def lod_end():
+    dt = time.perf_counter() - _lod["t0"]
+    _lod["avg"] = _lod["avg"] * 0.9 + dt * 0.1 if _lod["avg"] else dt
+    if _lod["avg"] > LOD_BUDGET:
+        _lod["q"] = max(0.2, _lod["q"] - 0.04)
+    elif _lod["avg"] < LOD_BUDGET * 0.55:
+        _lod["q"] = min(1.0, _lod["q"] + 0.01)
+    _lod["calm"] = _lod["calm"] + 1 if _lod["avg"] < LOD_BUDGET * 0.4 else 0
+
+def render_scale():
+    """1.0 normally; 0.5 (a quarter of the pixels) if the machine is really struggling, until it has coped easily for ~10 seconds"""
+    if _lod["rs"] == 1.0 and _lod["q"] < 0.4:
+        _lod["rs"], _lod["calm"] = 0.5, 0
+    elif _lod["rs"] == 0.5 and _lod["calm"] > 300:
+        _lod["rs"], _lod["calm"] = 1.0, 0
+    return _lod["rs"]
+
 def draw(screen, eyesy):
+    lod_start()
+    _draw(screen, eyesy)
+    lod_end()
+
+def _draw(screen, eyesy):
     xres, yres = eyesy.xres, eyesy.yres
     dt, beats, frac, kick, energy = beat_clock(eyesy)
 
@@ -59,7 +103,7 @@ def draw(screen, eyesy):
     bg = tuple(int(c) for c in eyesy.color_picker_bg(eyesy.knob5))
     screen.fill(bg)
 
-    cols = 6 + int(eyesy.knob3 * 34.99)
+    cols = 6 + int(eyesy.knob3 * 34.99 * (0.55 + 0.45 * _lod["q"]))          # fewer, bigger dots when the machine is struggling
     cell = xres / float(cols)
     rows = int(math.ceil(yres / cell))
     grow = 0.25 + eyesy.knob1 * 0.95                          # the biggest a dot can get, as a share of its cell
