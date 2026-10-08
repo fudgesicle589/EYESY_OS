@@ -6,14 +6,13 @@
 #   knob2 = main motion     (twist: 0.5 = straight, left/right = spiral either way, tighter toward the ends)
 #   knob3 = extra detail    (number of sides, 3 to 11)
 #   knob4 = foreground color (hue that cycles along the tunnel)
-#   knob5 = background color (the dark rings between the bright ones)
+#   knob5 = bonus control    (ring spacing: tightly packed rings up to wide, bold steps)
 #
 # Playing it (how you turn a knob changes the picture, not just where it ends up):
 #   knob1       -> lurch the tunnel forward (turn up) or yank it back (turn down)
 #   flick knob2 -> whip the spiral round; it unwinds on its own like a spring
 #   knob3       -> the rings wobble and flash white while you change the sides
 #   knob4       -> the rainbow along the tunnel stretches while you turn it
-#   knob5       -> the dark rings light up while you turn it
 import colorsys
 import math
 import time
@@ -111,8 +110,8 @@ def _draw(screen, eyesy):
     n = 3 + int(eyesy.knob3 * 8.99)                           # 3..11 sides
     fg = eyesy.color_picker(eyesy.knob4)
     h0 = colorsys.rgb_to_hsv(fg[0] / 255.0, fg[1] / 255.0, fg[2] / 255.0)[0]
-    bg = tuple(int(c) for c in eyesy.color_picker_bg(eyesy.knob5))
-    dark = tuple(int(c * 0.55 + (255 - c * 0.55) * env[4] * 0.55) for c in bg)     # the dark rings light up while knob 5 is played
+    bg = hsv(h0 + 0.55, 0.6, 0.08)
+    dark = hsv(h0 + 0.55, 0.6, 0.05)                           # the dark rings between the bright ones
     spread = 0.037 + 0.10 * env[3]                            # the colour change from ring to ring
     hshift = h0 + mom[3] * 2.0
 
@@ -124,7 +123,7 @@ def _draw(screen, eyesy):
 
     cx, cy = xres / 2.0, yres / 2.0
     diag = math.hypot(xres, yres)
-    q = 0.84                                                  # each level is this much smaller than the last
+    q = 0.74 + 0.18 * eyesy.knob5                             # each level is this much smaller than the last (knob 5: tight rings to wide steps)
     K = int(14 + 22 * _lod["q"])                              # fewer levels when the machine is struggling
     R0 = diag * 0.72 * (1.0 + 0.03 * math.sin(t * 3.0))
     screen.fill(bg)

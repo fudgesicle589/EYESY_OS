@@ -4,17 +4,16 @@
 #
 # Knob convention (same in every mode):
 #   knob1 = size            (radius and line thickness)
-#   knob2 = main motion     (the spirograph ratio, 1 to 13: sweep it and the whole flower morphs)
+#   knob2 = main motion     (the spirograph ratio, 1.5 to 7.5 in half steps: the flower glides calmly from one shape to the next)
 #   knob3 = extra detail    (number of ribbons, 1 to 9, spread evenly so they lock into symmetric flowers)
 #   knob4 = foreground color (base hue; the ribbons fan out from it)
-#   knob5 = background color (also the color the trails fade into)
+#   knob5 = bonus control    (spin: 0.5 = the flower holds still, left = it turns backward, right = forward, faster toward the ends)
 #
 # Playing it (how you turn a knob changes the picture, not just where it ends up):
 #   knob1       -> the flower swells past its size and relaxes back; the lines throb bolder
-#   flick knob2 -> the ratio overshoots and springs back, and the trails smear so you see the morph
 #   knob3       -> the ribbons peel apart while you change the count, then lock back into symmetry
 #   knob4       -> the ribbons fan out into a wide rainbow while you turn it
-#   knob5       -> the beads on the ribbons swell and the whole flower twirls
+#   knob5       -> the beads on the ribbons swell while you turn it
 import colorsys
 import math
 import time
@@ -109,29 +108,36 @@ def _draw(screen, eyesy):
     t = _state["t"]
     vel, env, mom = knob_play(eyesy, dt)
 
-    bg = tuple(int(c) for c in eyesy.color_picker_bg(eyesy.knob5))
+    fg = eyesy.color_picker(eyesy.knob4)
+    h0 = colorsys.rgb_to_hsv(fg[0] / 255.0, fg[1] / 255.0, fg[2] / 255.0)[0]
+    bg = hsv(h0 + 0.55, 0.65, 0.10)
     if _state["size"] != (xres, yres):
         _state["size"] = (xres, yres)
         _state["canvas"] = pygame.Surface((xres, yres))
         _state["fade"] = pygame.Surface((xres, yres))
     canvas, fade = _state["canvas"], _state["fade"]
     fade.fill(bg)
-    fade.set_alpha(int(80 - 62 * env[1]))                     # short trails, so every change shows right away; play knob 2 and they smear
+    fade.set_alpha(66)                                        # short, steady trails (knob 2 no longer smears them)
     canvas.blit(fade, (0, 0))
 
-    fg = eyesy.color_picker(eyesy.knob4)
-    h0 = colorsys.rgb_to_hsv(fg[0] / 255.0, fg[1] / 255.0, fg[2] / 255.0)[0]
 
     # ---- knobs ----
     R = min(xres, yres) * 0.47 * (0.18 + eyesy.knob1 * 1.05) * (1.0 + clamp(mom[0] * 2.0, -0.4, 0.6))
     thick = max(1, int((2 + int(eyesy.knob1 * 6) + env[0] * 4) * rs))     # bigger also means bolder lines
-    ratio = 1.0 + eyesy.knob2 * 12.0 + 0.12 * math.sin(t * 0.8) + mom[1] * 8.0    # a little wobble keeps it alive; a flick overshoots and springs back
+    # knob 2 picks the flower in half steps (1.5 to 7.5), which are the closed, symmetric shapes, and the picture glides
+    # to the new one instead of whipping there, so it morphs calmly however fast you turn
+    target = 1.5 + round(eyesy.knob2 * 12.0) * 0.5
+    ratio_now = _state.setdefault("ratio", target)
+    ratio_now += (target - ratio_now) * (1.0 - math.exp(-dt * 2.0))
+    _state["ratio"] = ratio_now
+    ratio = ratio_now + 0.02 * math.sin(t * 0.8)
     n = 1 + int(eyesy.knob3 * 8.99)
 
     cx, cy = xres / 2.0, yres / 2.0
     A = R * 0.60
     B = R * (0.40 + 0.06 * math.sin(t * 0.6))
-    spin = t * 0.18 + mom[4] * 4.0
+    _state["spin"] = _state.get("spin", 0.0) + dt * (eyesy.knob5 - 0.5) * 2 * 1.6        # knob 5 spins the whole flower: still in the middle, either way toward the ends
+    spin = t * 0.05 + _state["spin"]
     q = _lod["q"]
     pts_n = int(110 + 210 * q)                                # fewer points per ribbon when the machine is struggling
     step = math.pi * 4 / pts_n
@@ -146,7 +152,7 @@ def _draw(screen, eyesy):
     for i in range(n):
         off = i * (2 * math.pi / n)                           # even spacing: n ribbons make an n-fold flower
         a0 = spin + off * 0.25
-        p0 = ratio * spin + off * 0.5 + t * 0.35 + mom[2] * 9.0 * i     # while knob 3 moves, each ribbon drifts off by its own amount
+        p0 = off * 0.5 + t * 0.35 + mom[2] * 9.0 * i     # while knob 3 moves, each ribbon drifts off by its own amount
         ca0, sa0, cp0, sp0 = cos(a0), sin(a0), cos(p0), sin(p0)
         pts = [(cx + A * (ca0 * cj[j] - sa0 * sj[j]) + B * (cp0 * Cv[j] - sp0 * Sv[j]),
                 cy + A * (sa0 * cj[j] + ca0 * sj[j]) + B * (sp0 * Cv[j] + cp0 * Sv[j])) for j in range(pts_n)]
