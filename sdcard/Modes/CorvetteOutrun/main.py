@@ -70,6 +70,15 @@ def make_face(pts, ckey, axis_point, decals=None):
         n = scale(n, -1)
     return Face(pts, n, ckey, decals)
 
+def make_face_wound(pts, ckey, decals=None):
+    """Face whose normal comes straight from the winding of its points. The body rings run counter-clockwise, so this is
+    always the outward normal, even where the body tilts inward (the fender tops and the cabin base), which a
+    'point away from the middle of the car' guess gets backwards and then wrongly hides."""
+    n = cross(sub(pts[1], pts[0]), sub(pts[2], pts[0]))
+    if length(n) < 1e-9:
+        return None
+    return Face(pts, norm(n), ckey, decals)
+
 # ---------- body: lofted from cross-sections ----------
 # z: (belt-bottom half width, widest half width, fender half width, fender top, deck height)
 BODY_KEYS = [
@@ -234,6 +243,8 @@ def badge_decals():
         d.append(([(-x0, y0, z), (x0, y0, z), (x1, y1, z), (-x1, y1, z)], "decal", True))
     return d
 
+SEAM = 0.06   # how far glass panes overlap into the next body section (as a share of its length)
+
 def build_body():
     faces = []
     rows = [ring(z) for z in ROW_ZS]
@@ -248,8 +259,11 @@ def build_body():
                 if fb != fa:
                     u_a = (0.10 - fa) / (fb - fa)
                     u_b = (0.92 - fa) / (fb - fa)
-                    u0, u1 = clamp(min(u_a, u_b)), clamp(max(u_a, u_b))
+                    raw0, raw1 = min(u_a, u_b), max(u_a, u_b)
+                    u0, u1 = clamp(raw0), clamp(raw1)
                     if u1 - u0 > 0.02:
+                        if raw0 <= 0.0: u0 = -SEAM                     # the glass carries on into the neighbouring section, so
+                        if raw1 >= 1.0: u1 = 1.0 + SEAM                # overlap it a little to close the hairline between them
                         decals.append((pane(ra, rb, e, u0, u1, 0.08, 0.92), "glass", False))
                         if zc < 0:                                 # the split-window centre spine
                             decals.append((pane(ra, rb, e, u0, u1, 0.47, 0.53), "body", False))
@@ -257,8 +271,8 @@ def build_body():
                 for z0, z1 in PANES:
                     if z0 <= za + 1e-6 and zb <= z1 + 1e-6:
                         m = 0.05 / max(zb - za, 1e-6)
-                        u0 = m if abs(za - z0) < 1e-6 else 0.0
-                        u1 = 1 - m if abs(zb - z1) < 1e-6 else 1.0
+                        u0 = m if abs(za - z0) < 1e-6 else -SEAM
+                        u1 = 1 - m if abs(zb - z1) < 1e-6 else 1.0 + SEAM
                         decals.append((pane(ra, rb, e, u0, u1, 0.22, 0.86), "glass", False))
             if e in (2, 8) and za >= 0.65 - 1e-6 and zb <= 0.90 + 1e-6:
                 for lo in (0.12, 0.42, 0.72):                      # chrome fender slashes behind the front wheel
@@ -266,7 +280,7 @@ def build_body():
             if e == 5 and fa == 0.0 and fb == 0.0 and zc > 1.0:   # twin racing stripes over the hood too
                 decals.append((pane(ra, rb, e, 0, 1, 0.36, 0.44), "decal", True))
                 decals.append((pane(ra, rb, e, 0, 1, 0.56, 0.64), "decal", True))
-            f = make_face(quad, ckey, (0.0, 0.6, zc), decals)
+            f = make_face_wound(quad, ckey, decals)
             if f: faces.append(f)
     rear = Face(list(rows[0][0]), (0.0, 0.0, -1.0), "body", rear_decals())
     front = Face(list(rows[-1][0]), (0.0, 0.0, 1.0), "body", front_decals())

@@ -6,7 +6,7 @@
 #   knob2 = main motion     (flow: 0.5 = frozen, left = backward, right = forward, faster toward the ends)
 #   knob3 = extra detail    (layers and melt, plus how many color rings; at the top it goes full zebra)
 #   knob4 = foreground color (hue)
-#   knob5 = background color (the dark tone the plasma dips into)
+#   knob5 = bonus control    (palette spin: 0.5 = colors hold still, left = they roll backward, right = forward, faster toward the ends)
 #
 # Playing it (how you turn a knob changes the picture, not just where it ends up):
 #   knob1       -> zoom lurches in or out past where it will rest, then relaxes
@@ -119,12 +119,13 @@ def _draw(screen, eyesy):
     detail = eyesy.knob3
     layers = 2 + int(detail * 2.99)                           # 2..4 layers of waves
     melt = 0.4 + detail * 2.4 + env[2] * 2.0                  # how much the waves fold over themselves; play knob 3 and they fold hard
-    roll = int((mom[3] + mom[4]) * 700)                       # the palette whooshes round while a color knob moves
+    _state["pal"] = _state.get("pal", 0.0) + dt * (eyesy.knob5 - 0.5) * 2 * 160.0       # knob 5 spins the palette round the plasma
+    roll = int(mom[3] * 700 + _state["pal"])                  # (and it whooshes while the color knob moves)
     bands = 1.0 + detail * 7.0                                # how many color rings
 
     fg = eyesy.color_picker(eyesy.knob4)
     h0 = colorsys.rgb_to_hsv(fg[0] / 255.0, fg[1] / 255.0, fg[2] / 255.0)[0]
-    bg = eyesy.color_picker_bg(eyesy.knob5)
+    bg = tuple(int(c * 255) for c in colorsys.hsv_to_rgb((h0 + 0.55) % 1.0, 0.65, 0.10))      # the dark tone the plasma dips into
     lutb = _ramp(h0, bands, bg)
 
     # ---- the field: separable waves per column and per row, plus a radial one per pixel ----

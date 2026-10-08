@@ -6,7 +6,7 @@
 #   knob2 = main motion     (tempo, 30 to 120 BPM)
 #   knob3 = extra detail    (ring shape: 3 sides, 4, 5 ... up to a smooth circle at the top)
 #   knob4 = foreground color (hue; each new ring steps around the color wheel)
-#   knob5 = background color
+#   knob5 = bonus control    (rapid fire: 1 to 4 rings fired per beat)
 import colorsys
 import math
 import time
@@ -69,7 +69,7 @@ def draw(screen, eyesy):
     dt, beats, frac, kick, bpm, energy = beat_clock(eyesy)
     fg = eyesy.color_picker(eyesy.knob4)
     h0 = colorsys.rgb_to_hsv(fg[0] / 255.0, fg[1] / 255.0, fg[2] / 255.0)[0]
-    bg = tuple(int(c) for c in eyesy.color_picker_bg(eyesy.knob5))
+    bg = hsv(h0 + 0.55, 0.65, 0.10)
     screen.fill(bg)
 
     cx, cy = xres / 2.0, yres / 2.0
@@ -79,10 +79,11 @@ def draw(screen, eyesy):
     thick = 3 + int(eyesy.knob1 * 26)
 
     # a ring is born on every whole beat
-    b = int(math.floor(beats))
+    fire = 1 + int(eyesy.knob5 * 3.99)
+    b = int(math.floor(beats * fire))
     if b != _state["spawned"]:
         _state["spawned"] = b
-        _state["rings"].append({"age": 0.0, "hue": h0 + b * 0.083, "spin": (1 if b % 2 == 0 else -1)})
+        _state["rings"].append({"age": 0.0, "hue": h0 + b * 0.083 / fire, "spin": (1 if b % 2 == 0 else -1)})
     if energy > 0.55 and time.time() - _state["extra"] > 0.30:      # a big knob turn fires a ring of its own
         _state["extra"] = time.time()
         _state["rings"].append({"age": 0.0, "hue": h0 + 0.5 + (beats % 1.0) * 0.4, "spin": (-1 if b % 2 == 0 else 1)})

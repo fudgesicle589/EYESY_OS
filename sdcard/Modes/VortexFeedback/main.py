@@ -5,16 +5,15 @@
 # Knob convention (same in every mode):
 #   knob1 = size            (brush size and how wide the arms swing)
 #   knob2 = main motion     (warp: the middle is calm, either end twists and zooms harder, in opposite directions)
-#   knob3 = extra detail    (number of arms, 1 to 12, and how many sparkles rain down)
+#   knob3 = extra detail    (number of arms, 1 to 12)
 #   knob4 = foreground color (base hue; the trails keep cycling through the rainbow from it)
-#   knob5 = background color (what the tunnel fades into)
+#   knob5 = bonus control    (trail length: crisp, short trails up to long smeared ones)
 #
 # Playing it (how you turn a knob changes the picture, not just where it ends up):
 #   knob1       -> the brushes balloon and the arms fling wide while you turn it
 #   flick knob2 -> an extra whip of twist and zoom that unwinds, so you can snap the whole tunnel round on a beat
-#   knob3       -> a burst of sparkles rains down while you turn it
+#   key 0       -> tap it on the beat: a burst of sparkles rains down and the brushes pulse (on the real device an audio hit does it)
 #   knob4       -> the colors slam round the rainbow while you turn it
-#   knob5       -> the trails hang on much longer while you turn it
 import colorsys
 import math
 import random
@@ -42,7 +41,7 @@ def hsv(h, s, v):
     else: r, g, b = v255, p, q
     return (int(r), int(g), int(b))
 
-_state = {"t": 0.0, "last": None, "buf": None, "size": None, "prev": {}}
+_state = {"t": 0.0, "last": None, "buf": None, "size": None, "prev": {}, "kick": 0.0}
 
 # ---- playing the knobs: HOW a knob is being turned matters as much as where it sits ----
 _play = {"prev": None, "vel": [0.0] * 5, "env": [0.0] * 5, "mom": [0.0] * 5}
@@ -107,6 +106,10 @@ def _draw(screen, eyesy):
     _state["t"] += dt
     t = _state["t"]
     vel, env, mom = knob_play(eyesy, dt)
+    if getattr(eyesy, "trig", False):                         # the 0 key (or an audio hit) throws a burst of sparkles and a fat brush pulse
+        _state["burst"] = 1.0
+    _state["burst"] = _state.get("burst", 0.0) * math.exp(-dt * 3.0)
+    _state["kick"] = _state["burst"]
 
     q = _lod["q"]
     tier = _state.get("tier", 2)                              # the feedback runs at half size, or a third if the machine is struggling
@@ -116,7 +119,9 @@ def _draw(screen, eyesy):
         tier = 2
     _state["tier"] = tier
     bw, bh = max(xres // tier, 64), max(yres // tier, 64)
-    bg = tuple(int(c) for c in eyesy.color_picker_bg(eyesy.knob5))
+    fg = eyesy.color_picker(eyesy.knob4)
+    h0 = colorsys.rgb_to_hsv(fg[0] / 255.0, fg[1] / 255.0, fg[2] / 255.0)[0]
+    bg = hsv(h0 + 0.55, 0.65, 0.10)
     if _state["size"] != (xres, yres, tier):
         _state["size"] = (xres, yres, tier)
         _state["buf"] = pygame.Surface((bw, bh))
@@ -124,16 +129,13 @@ def _draw(screen, eyesy):
         _state["prev"] = {}
     buf = _state["buf"]
 
-    fg = eyesy.color_picker(eyesy.knob4)
-    h0 = colorsys.rgb_to_hsv(fg[0] / 255.0, fg[1] / 255.0, fg[2] / 255.0)[0]
-
     # ---- knobs ----
     warp = max(-1.4, min(1.4, (eyesy.knob2 - 0.5) * 2 + mom[1] * 6.0))     # -1 .. +1, plus a whip when knob 2 is flicked
     twist = warp * 6.0                                        # degrees per frame, and which way
     zoom = 1.008 + abs(warp) * 0.07                           # the further from the middle, the harder it rushes in
     arms = 1 + int(eyesy.knob3 * 11.99)
-    sparkles = 4 + int(eyesy.knob3 * 60 + env[2] * 120 * (0.5 + 0.5 * q))
-    brush = (3 + eyesy.knob1 * 22) * (1.0 + env[0] * 0.8) * 2.0 / tier     # pixels of the small picture
+    sparkles = 6 + int(_state["burst"] * 160 * (0.5 + 0.5 * q))          # sparkles rain on the 0 key / audio hit
+    brush = (3 + eyesy.knob1 * 22) * (1.0 + env[0] * 0.8 + _state["burst"] * 0.6) * 2.0 / tier     # pixels of the small picture
     swing = 0.55 + eyesy.knob1 * 1.6 + clamp(mom[0] * 4.0, -0.4, 1.2)       # how far out the arms orbit
 
     # the whole tunnel drifts around a wandering centre, so it curves
@@ -147,7 +149,7 @@ def _draw(screen, eyesy):
     tx = ox + (bw / 2.0 - ox) * zoom                          # zoom about the wandering centre, still covering the whole screen
     ty = oy + (bh / 2.0 - oy) * zoom
     buf.blit(rz, rz.get_rect(center=(int(tx), int(ty))))
-    keep = 247 + int(env[4] * 7)                              # play knob 5 and the trails linger
+    keep = 236 + int(eyesy.knob5 * 18)                        # knob 5: crisp short trails up to long smeared ones
     buf.fill((keep, keep, keep), special_flags=pygame.BLEND_RGB_MULT)                                   # fade a little
     _state["n"] = _state.get("n", 0) + 1
     if _state["n"] % 2 == 0:                                                                                     # ...toward the background (every other frame, twice as strongly)

@@ -9,7 +9,7 @@
 #   knob2 = main motion     (tempo, 30 to 120 BPM)
 #   knob3 = extra detail    (number of pendulums, 8 to 40)
 #   knob4 = foreground color (hue of the bobs)
-#   knob5 = bonus control    (drift: how fast neighbouring pendulums fall out of step)
+#   knob5 = bonus control    (drift: how fast the pendulums fall out of step, spread evenly across the row so it stays calm)
 import colorsys
 import math
 import random
@@ -128,17 +128,18 @@ def _draw(screen, eyesy):
     n = 8 + int(eyesy.knob3 * 32.99)
     pivot_y = yres * 0.06
     L = yres * 0.60
-    theta_max = (0.25 + eyesy.knob1 * 0.65) * (1.0 + 0.5 * energy)
-    drift = 0.05 + 0.75 * eyesy.knob5                        # tiny drift = slow, wide waves; big drift = a tight, busy ripple
+    theta_max = (0.25 + eyesy.knob1 * 0.65) * (1.0 + 0.10 * energy)
+    spread = 0.5 + 6.0 * eyesy.knob5                         # extra swings per 16 beats between the first and last pendulum: small = slow, wide waves; big = a tighter ripple
+    # (it no longer grows with the number of pendulums, so adding more never makes it busier)
     pygame.draw.line(canvas, hsv(h0 + 0.5, 0.4, 0.6), (xres * 0.03, pivot_y), (xres * 0.97, pivot_y), 3)
     for i in range(n):
         x0 = xres * (0.06 + 0.88 * i / max(n - 1, 1))
-        phase = 2 * math.pi * (3.0 + i * drift) * beats / 16.0
+        phase = 2 * math.pi * (3.0 + spread * i / max(n - 1, 1)) * beats / 16.0
         th = theta_max * math.sin(phase)
         bx, by = x0 + L * math.sin(th), pivot_y + L * math.cos(th)
         col = hsv(h0 + i / n * 0.6, 0.85, 1.0)
         pygame.draw.line(canvas, hsv(h0 + i / n * 0.6, 0.5, 0.45), (x0, pivot_y), (bx, by), 1)
-        pygame.draw.circle(canvas, col, (int(bx), int(by)), max(2, int((6 + 10 * eyesy.knob1) * (1.0 + 0.45 * kick) * rs)))
+        pygame.draw.circle(canvas, col, (int(bx), int(by)), max(2, int((6 + 10 * eyesy.knob1) * (1.0 + 0.12 * kick) * rs)))
         pygame.draw.circle(canvas, hsv(h0 + i / n * 0.6, 0.25, 1.0), (int(bx), int(by)), max(1, int((3 + 4 * eyesy.knob1) * rs)))
         pygame.draw.circle(canvas, hsv(h0 + 0.5, 0.4, 0.5), (int(x0), int(pivot_y + L)), 2)              # the resting line
     if rs == 1.0:

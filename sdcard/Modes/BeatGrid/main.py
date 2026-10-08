@@ -6,7 +6,7 @@
 #   knob2 = main motion     (tempo, 30 to 120 BPM)
 #   knob3 = extra detail    (grid density, 6 to 40 columns, and the wave shape: circle -> diamond -> square)
 #   knob4 = foreground color (hue of the dots)
-#   knob5 = background color
+#   knob5 = bonus control    (echo rings: 1 to 4 shockwaves on screen at once; the more there are, the slower they travel)
 import colorsys
 import math
 import time
@@ -100,14 +100,27 @@ def _draw(screen, eyesy):
 
     fg = eyesy.color_picker(eyesy.knob4)
     h0 = colorsys.rgb_to_hsv(fg[0] / 255.0, fg[1] / 255.0, fg[2] / 255.0)[0]
-    bg = tuple(int(c) for c in eyesy.color_picker_bg(eyesy.knob5))
+    bg = hsv(h0 + 0.55, 0.65, 0.10)
     screen.fill(bg)
 
     cols = 6 + int(eyesy.knob3 * 34.99 * (0.55 + 0.45 * _lod["q"]))          # fewer, bigger dots when the machine is struggling
     cell = xres / float(cols)
     rows = int(math.ceil(yres / cell))
     grow = 0.25 + eyesy.knob1 * 0.95                          # the biggest a dot can get, as a share of its cell
-    ring_r = frac * 1.7                                       # the wave front this beat, in screen half-widths
+    echoes = 1 + int(eyesy.knob5 * 3.99)                      # how many shockwaves travel together
+    speed = 1.7 / (1.0 + 0.5 * (echoes - 1))                  # more echoes travel slower, so several fit on screen
+    # every wave is worked out from where it is, so nothing jumps when a new beat starts: a wave fades in as it leaves the
+    # middle and fades out as it travels, and the wave that is about to die at the end of a beat is exactly the one that
+    # has not yet appeared at the start of the next
+    waves = []
+    for m in range(echoes + 1):
+        pos = (frac + m) * speed
+        amp = min(1.0, pos / 0.25) * max(0.0, 1.0 - pos / (speed * (echoes + 1)))
+        if amp > 0.01:
+            waves.append((pos, amp))
+    bump = math.sin(math.pi * frac) ** 2                      # a smooth beat pulse that is 0 at both ends of the beat
+    ext = max(0.0, kick - (1.0 - frac) ** 3)                  # (what is left of the kick is a knob turn or an audio hit)
+    pulse = 0.5 * bump + ext
     k3 = eyesy.knob3
     q = 2.0 - 2.0 * k3 if k3 < 0.5 else 1.0 + (k3 - 0.5) * 10.0     # wave shape: circle (2) -> diamond (1) -> square (6)
     width = 0.10 + eyesy.knob1 * 0.28
@@ -119,9 +132,12 @@ def _draw(screen, eyesy):
             x = (i + 0.5) * cell
             ddx, ddy = abs(x - cx) / half, abs(y - cy) / half
             d = (ddx ** q + ddy ** q) ** (1.0 / q) if (ddx > 0 or ddy > 0) else 0.0
-            w = math.exp(-((d - ring_r) / width) ** 2)                 # this beat's wave
-            w2 = math.exp(-((d - ring_r - 1.7) / width) ** 2)          # the last beat's wave, still travelling
-            swell = clamp(w + w2 * 0.6 + energy * 0.5 * (0.5 + 0.5 * math.sin(d * 9.0 - beats * 3.0)))     # touching a knob sets the whole wall rippling
-            r = cell * 0.5 * (0.12 + grow * (0.15 + 0.85 * swell)) * (1.0 + 0.25 * kick)
+            sw = 0.0
+            for pos, amp in waves:
+                dd = (d - pos) / width
+                if -3.0 < dd < 3.0:
+                    sw += amp * math.exp(-dd * dd)
+            swell = clamp(sw + energy * 0.5 * (0.5 + 0.5 * math.sin(d * 9.0 - beats * 3.0)))     # touching a knob sets the whole wall rippling
+            r = cell * 0.5 * (0.12 + grow * (0.15 + 0.85 * swell)) * (1.0 + 0.25 * pulse)
             hue = h0 + d * 0.35 + ((i + j) % 2) * 0.06 + beats * 0.01
-            pygame.draw.circle(screen, hsv(hue, 0.85 - 0.5 * swell, 0.35 + 0.65 * (swell * 0.8 + 0.2 * kick)), (int(x), int(y)), max(1, int(r)))
+            pygame.draw.circle(screen, hsv(hue, 0.85 - 0.5 * swell, 0.35 + 0.65 * (swell * 0.8 + 0.2 * pulse)), (int(x), int(y)), max(1, int(r)))
