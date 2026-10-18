@@ -70,7 +70,8 @@ def draw(screen, eyesy):
     fg = eyesy.color_picker(eyesy.knob4)
     h0 = colorsys.rgb_to_hsv(fg[0] / 255.0, fg[1] / 255.0, fg[2] / 255.0)[0]
     bg = hsv(h0 + 0.55, 0.65, 0.10)
-    screen.fill(bg)
+    if eyesy.auto_clear:
+        screen.fill(bg)
 
     cx, cy = xres / 2.0, yres / 2.0
     reach = math.hypot(xres, yres) / 2.0

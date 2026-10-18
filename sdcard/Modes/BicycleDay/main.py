@@ -379,7 +379,8 @@ def _draw(screen, eyesy):
     spin = t * 0.07
 
     # ---- 1. the tunnel ----
-    _tunnel(screen, xres, yres, t, _state["fly"], spin, N, detail, zoom, roll, hbg, bgc, q)
+    if eyesy.auto_clear:                                                   # screen-clear off: the old picture stays and new things pile on top
+        _tunnel(screen, xres, yres, t, _state["fly"], spin, N, detail, zoom, roll, hbg, bgc, q)
 
     cx, cy = xres * CX + 6 * sin(t * 0.7), yres * CY + 6 * cos(t * 0.9)
     Rmax = math.hypot(xres, yres) * 0.6

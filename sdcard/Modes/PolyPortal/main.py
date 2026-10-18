@@ -126,7 +126,8 @@ def _draw(screen, eyesy):
     q = 0.74 + 0.18 * eyesy.knob5                             # each level is this much smaller than the last (knob 5: tight rings to wide steps)
     K = int(14 + 22 * _lod["q"])                              # fewer levels when the machine is struggling
     R0 = diag * 0.72 * (1.0 + 0.03 * math.sin(t * 3.0))
-    screen.fill(bg)
+    if eyesy.auto_clear:
+        screen.fill(bg)
     sway = (0.05 * xres * math.sin(t * 0.6), 0.05 * yres * math.sin(t * 0.9 + 1.0))    # the tunnel sways a little
 
     for k in range(K):

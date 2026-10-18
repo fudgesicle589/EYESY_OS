@@ -146,9 +146,10 @@ def canvas_for(eyesy, bg, alpha, size=None):
         _state["canvas"] = pygame.Surface((xres, yres))
         _state["canvas"].fill(bg)
         _state["fade"] = pygame.Surface((xres, yres))
-    _state["fade"].fill(bg)
-    _state["fade"].set_alpha(alpha)
-    _state["canvas"].blit(_state["fade"], (0, 0))
+    if eyesy.auto_clear:                                       # screen-clear off: nothing fades, so drawings persist
+        _state["fade"].fill(bg)
+        _state["fade"].set_alpha(alpha)
+        _state["canvas"].blit(_state["fade"], (0, 0))
     return _state["canvas"]
 
 # ---------------------------------------------------------------- adaptive quality (Raspberry Pi)
@@ -206,7 +207,8 @@ def _draw(screen, eyesy):
     xres, yres = eyesy.xres, eyesy.yres
     dt, beats, frac, kick, energy = beat_clock(eyesy)
     h0, bg = colors(eyesy)
-    screen.fill(bg)
+    if eyesy.auto_clear:
+        screen.fill(bg)
     q = _lod["q"]
     L = 8 + int(eyesy.knob3 * 32.99)
     L = max(6, int(L * (0.55 + 0.45 * q)))

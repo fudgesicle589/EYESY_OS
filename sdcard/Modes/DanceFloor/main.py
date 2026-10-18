@@ -147,9 +147,10 @@ def canvas_for(eyesy, bg, alpha, size=None):
         _state["canvas"] = pygame.Surface((xres, yres))
         _state["canvas"].fill(bg)
         _state["fade"] = pygame.Surface((xres, yres))
-    _state["fade"].fill(bg)
-    _state["fade"].set_alpha(alpha)
-    _state["canvas"].blit(_state["fade"], (0, 0))
+    if eyesy.auto_clear:                                       # screen-clear off: nothing fades, so drawings persist
+        _state["fade"].fill(bg)
+        _state["fade"].set_alpha(alpha)
+        _state["canvas"].blit(_state["fade"], (0, 0))
     return _state["canvas"]
 
 # ---------------------------------------------------------------- adaptive quality (Raspberry Pi)
@@ -200,7 +201,8 @@ def _draw(screen, eyesy):
         A["flash"] = 1.0
     A["flash"] = max(0.0, A.get("flash", 0.0) - dt * 2.5)
     flash = A["flash"]
-    screen.fill(bg)
+    if eyesy.auto_clear:
+        screen.fill(bg)
     cx, horizon = xres / 2.0, yres * 0.36
     for i in range(7):                                         # a glow band on the horizon
         pygame.draw.rect(screen, hsv(h0 + i * 0.05, 0.8, (0.30 - i * 0.04) + 0.25 * kick + 0.3 * flash), (0, int(horizon - (i + 1) * yres * 0.035), xres, int(yres * 0.03)))

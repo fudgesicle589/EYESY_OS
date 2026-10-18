@@ -233,9 +233,10 @@ def draw(screen, eyesy):
     py = yres / 2.0 + loop * math.sin(a) + petal * math.sin(a * 3)
 
     canvas = _state["canvas"]
-    ghost = pygame.Surface((xres, yres))
-    ghost.fill(bg)
-    ghost.set_alpha(200)                                        # a short smear of the star behind it
-    canvas.blit(ghost, (0, 0))
+    if eyesy.auto_clear:                                        # screen-clear off: nothing fades, so every star stays
+        ghost = pygame.Surface((xres, yres))
+        ghost.fill(bg)
+        ghost.set_alpha(200)                                    # a short smear of the star behind it
+        canvas.blit(ghost, (0, 0))
     canvas.blit(img, img.get_rect(center=(int(px), int(py))))
     screen.blit(canvas, (0, 0))

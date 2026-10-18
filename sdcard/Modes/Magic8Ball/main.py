@@ -372,7 +372,8 @@ def draw(screen, eyesy):
     # ---- background ----
     bg = eyesy.color_picker_bg(knobs[4])
     bg = (int(bg[0]), int(bg[1]), int(bg[2]))
-    screen.fill(bg)
+    if eyesy.auto_clear:
+        screen.fill(bg)
     if R * 1.4 < yres:
         sh = tuple(int(c * 0.45) for c in bg)
         for i in range(6):

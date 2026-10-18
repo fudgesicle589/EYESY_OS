@@ -182,6 +182,7 @@ def impact(h, power):
     del _S["debris"][:-70]
 
 # ---------------------------------------------------------------- draw
+_scratch = pygame.Surface((1, 1))                      # screen-clear off: scenery is drawn here so the old picture stays
 def draw(screen, eyesy):
     if not SKULL:
         build_skull()
@@ -532,8 +533,10 @@ def draw(screen, eyesy):
         if dep < 0.15: dep = 0.15
         return (cxs + F * dx / dep, cys - F * (dy * COS_P - dz * SIN_P) / dep, dep)
 
+    bgs = screen if eyesy.auto_clear else _scratch              # screen-clear off: stage and floor go nowhere, so the old picture stays
+
     def line(a, b, col, w=1):
-        pygame.draw.line(screen, col, (a[0], a[1]), (b[0], b[1]), w)
+        pygame.draw.line(bgs, col, (a[0], a[1]), (b[0], b[1]), w)
 
     def draw_group(g):
         pv = [proj(p) for p in g["v"]]
@@ -548,14 +551,14 @@ def draw(screen, eyesy):
     # ---- the window: everything inside it is the "screen"; the thick black border around it is the false frame ----
     wx, wy = int(xres * 0.07), int(yres * 0.05)
     win = pygame.Rect(wx, wy, xres - 2 * wx, int(yres * 0.77))
-    screen.fill((7, 6, 10))
+    bgs.fill((7, 6, 10))
     screen.set_clip(win)
-    screen.fill((0, 0, 0), win)
+    bgs.fill((0, 0, 0), win)
     for sx, sy, ph in _S["stars"]:
         b = int(80 + 80 * math.sin(t * 2 + ph))
-        screen.set_at((int(sx * xres), int(sy * yres)), (b, b, b))
+        bgs.set_at((int(sx * xres), int(sy * yres)), (b, b, b))
     corners = [proj(p) for p in ((-16, 0, 4.0), (16, 0, 4.0), (16, 0, -18), (-16, 0, -18))]
-    pygame.draw.polygon(screen, floor_col, [(c[0], c[1]) for c in corners])
+    pygame.draw.polygon(bgs, floor_col, [(c[0], c[1]) for c in corners])
     for k in range(10):                                          # truss frames rushing toward the camera
         z = 3.0 - (k + phase) * ZSP
         pts = [proj(p) for p in ((-4.6, 0, z), (4.6, 0, z), (4.6, 4.9, z), (-4.6, 4.9, z))]
@@ -563,7 +566,7 @@ def draw(screen, eyesy):
         fade = clamp(1.25 - dep / 22.0)
         col = scaled(stage, fade)
         poly = [(p[0], p[1]) for p in pts]
-        pygame.draw.polygon(screen, col, poly, 2 if dep < 14 else 1)
+        pygame.draw.polygon(bgs, col, poly, 2 if dep < 14 else 1)
         if dep < 16:
             pygame.draw.polygon(layer, scaled(stage, fade * 0.5), poly, 4)
         if k % 2 == 0:                                           # LED strips on the walls
@@ -594,21 +597,21 @@ def draw(screen, eyesy):
         fade = clamp(1.0 - sh["age"] / 1.6)
         ring = [proj((sh["x"] + math.cos(k * math.pi / 14) * r, 0.02, sh["z"] + math.sin(k * math.pi / 14) * r * 0.9)) for k in range(28)]
         poly = [(p[0], p[1]) for p in ring]
-        pygame.draw.polygon(screen, scaled(accent, fade), poly, 3)
+        pygame.draw.polygon(bgs, scaled(accent, fade), poly, 3)
         pygame.draw.polygon(layer, scaled(accent, fade), poly, 7)
     for h in range(2):                                           # contact shadow under each fist: the closer, the tighter and darker
         H = _S["hands"][h]["H"]
         x, _y, z = hand_pos(h, H)
         r = 0.26 + 0.30 * clamp(H * 1.4)
         pts = [proj((x + math.cos(k * math.pi / 8) * r * 1.3, 0.015, z + math.sin(k * math.pi / 8) * r)) for k in range(16)]
-        pygame.draw.polygon(screen, scaled(floor_col, 0.05 + 0.5 * clamp(H * 1.4)), [(p[0], p[1]) for p in pts])
+        pygame.draw.polygon(bgs, scaled(floor_col, 0.05 + 0.5 * clamp(H * 1.4)), [(p[0], p[1]) for p in pts])
     for g in skull_groups:
         draw_group(g)
     small = pygame.transform.smoothscale(layer, (max(2, xres // 8), max(2, yres // 8)))
     big = pygame.transform.smoothscale(small, (xres, yres))
-    screen.blit(big, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
+    bgs.blit(big, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
     if flash > 0.05:                                             # whole-window flash on a hard hit
-        screen.fill((int(40 * flash), int(40 * flash), int(46 * flash)), special_flags=pygame.BLEND_RGB_ADD)
+        bgs.fill((int(40 * flash), int(40 * flash), int(46 * flash)), special_flags=pygame.BLEND_RGB_ADD)
     screen.set_clip(None)
     pygame.draw.rect(screen, scaled(stage, 0.5), win.inflate(4, 4), 2)      # the visible edge of the false frame
 

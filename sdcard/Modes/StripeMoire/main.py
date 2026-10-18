@@ -146,9 +146,10 @@ def canvas_for(eyesy, bg, alpha, size=None):
         _state["canvas"] = pygame.Surface((xres, yres))
         _state["canvas"].fill(bg)
         _state["fade"] = pygame.Surface((xres, yres))
-    _state["fade"].fill(bg)
-    _state["fade"].set_alpha(alpha)
-    _state["canvas"].blit(_state["fade"], (0, 0))
+    if eyesy.auto_clear:                                       # screen-clear off: nothing fades, so drawings persist
+        _state["fade"].fill(bg)
+        _state["fade"].set_alpha(alpha)
+        _state["canvas"].blit(_state["fade"], (0, 0))
     return _state["canvas"]
 
 # ---------------------------------------------------------------- adaptive quality (Raspberry Pi)
@@ -202,7 +203,8 @@ def _draw(screen, eyesy):
         aux["size"] = (w, h)
         aux["A"], aux["B"] = pygame.Surface((w, h)), pygame.Surface((w, h))
     A, B = aux["A"], aux["B"]
-    A.fill(tuple(int(c * 0.8) for c in bg))
+    if eyesy.auto_clear:                                       # screen-clear off: the stripes pile up instead of being wiped
+        A.fill(tuple(int(c * 0.8) for c in bg))
     B.fill((0, 0, 0))
     n = 6 + int(eyesy.knob3 * 29.99)
     diag = math.hypot(w, h)
@@ -241,7 +243,7 @@ def _draw(screen, eyesy):
         r = (k + roll) * ring_sp
         if r > 2:
             pygame.draw.circle(B, ring_col, (int(cx), int(cy)), int(r), ring_w)
-    A.blit(B, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
+    A.blit(B, (0, 0), special_flags=pygame.BLEND_RGB_ADD if eyesy.auto_clear else pygame.BLEND_RGB_MAX)
     if q > 0.6:
         pygame.transform.smoothscale(A, (xres, yres), screen)
     else:

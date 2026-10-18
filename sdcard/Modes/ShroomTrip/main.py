@@ -182,13 +182,14 @@ def _draw(screen, eyesy):
     # ---- feedback: breathe the last frame in or out and swirl it, so everything leaves melting echoes ----
     tw = math.radians(abs(twist))
     zoom = max(zoom, (math.cos(tw) + (bw / float(bh)) * math.sin(tw)) * 1.02)     # a hard swirl needs a little extra zoom to avoid empty corners
-    rz = pygame.transform.rotozoom(buf, twist, zoom)
-    buf.blit(rz, rz.get_rect(center=(int(ox + (bw / 2.0 - ox) * zoom), int(oy + (bh / 2.0 - oy) * zoom))))
-    keep = 232 + int(env[4] * 20) + int(eyesy.knob5 * 0)       # turning knob 5 stretches the trails out
-    buf.fill((keep, keep, keep), special_flags=pygame.BLEND_RGB_MULT)
     _state["n"] += 1
-    if _state["n"] % 2 == 0:                                   # fade toward the background (every other frame)
-        buf.fill((int(bg[0] * 0.03), int(bg[1] * 0.03), int(bg[2] * 0.03)), special_flags=pygame.BLEND_RGB_ADD)
+    if eyesy.auto_clear:                                       # screen-clear off: the old frame is frozen in place (no swirl or fade)
+        rz = pygame.transform.rotozoom(buf, twist, zoom)
+        buf.blit(rz, rz.get_rect(center=(int(ox + (bw / 2.0 - ox) * zoom), int(oy + (bh / 2.0 - oy) * zoom))))
+        keep = 232 + int(env[4] * 20) + int(eyesy.knob5 * 0)   # turning knob 5 stretches the trails out
+        buf.fill((keep, keep, keep), special_flags=pygame.BLEND_RGB_MULT)
+        if _state["n"] % 2 == 0:                               # fade toward the background (every other frame)
+            buf.fill((int(bg[0] * 0.03), int(bg[1] * 0.03), int(bg[2] * 0.03)), special_flags=pygame.BLEND_RGB_ADD)
 
     # ---- spores drift up in lazy wobbling lines ----
     spores = _state["spores"]

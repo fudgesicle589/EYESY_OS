@@ -89,9 +89,10 @@ def canvas_for(eyesy, bg, alpha):
         _state["canvas"] = pygame.Surface((xres, yres))
         _state["canvas"].fill(bg)
         _state["fade"] = pygame.Surface((xres, yres))
-    _state["fade"].fill(bg)
-    _state["fade"].set_alpha(alpha)
-    _state["canvas"].blit(_state["fade"], (0, 0))
+    if eyesy.auto_clear:                                       # screen-clear off: nothing fades, so drawings persist
+        _state["fade"].fill(bg)
+        _state["fade"].set_alpha(alpha)
+        _state["canvas"].blit(_state["fade"], (0, 0))
     return _state["canvas"]
 
 # ---- playing the knobs: HOW a knob is being turned matters as much as where it sits ----
@@ -124,7 +125,8 @@ def draw(screen, eyesy):
     vel, env, mom = _play["vel"], _play["env"], _play["mom"]
     h0, bg = colors(eyesy)
     h0 += mom[3] * 2.0                                         # knob 4 slams the colors round while you turn it
-    screen.fill(bg)
+    if eyesy.auto_clear:
+        screen.fill(bg)
     cx, cy = xres / 2.0, yres / 2.0
     far = math.hypot(xres, yres)
     rays = 2 * (3 + int(eyesy.knob3 * 21.99))                 # an even number, 6..48

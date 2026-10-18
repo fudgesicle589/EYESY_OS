@@ -265,7 +265,8 @@ def draw(screen, eyesy):
     bs, bv = max(bs, 0.55), max(bv, 0.8)
     water_h = bh + 0.45 + mom[3] * 1.5
 
-    screen.fill(bg)
+    if eyesy.auto_clear:
+        screen.fill(bg)
     hy = yres * 0.36
     H = yres - hy + 12
     cx = xres * 0.5

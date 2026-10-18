@@ -145,9 +145,10 @@ def canvas_for(eyesy, bg, alpha, size=None):
         _state["canvas"] = pygame.Surface((xres, yres))
         _state["canvas"].fill(bg)
         _state["fade"] = pygame.Surface((xres, yres))
-    _state["fade"].fill(bg)
-    _state["fade"].set_alpha(alpha)
-    _state["canvas"].blit(_state["fade"], (0, 0))
+    if eyesy.auto_clear:                                       # screen-clear off: nothing fades, so drawings persist
+        _state["fade"].fill(bg)
+        _state["fade"].set_alpha(alpha)
+        _state["canvas"].blit(_state["fade"], (0, 0))
     return _state["canvas"]
 
 # ---------------------------------------------------------------- adaptive quality (Raspberry Pi)
@@ -189,7 +190,8 @@ def _draw(screen, eyesy):
     dt, beats, frac, kick, energy = beat_clock(eyesy)
     h0, bg = colors(eyesy)
     lvl = max(kick, _au["level"] if _au["live"] else 0.0)
-    screen.fill(tuple(min(255, int(c + 22 * lvl * (1.0 if i == 2 else 0.6))) for i, c in enumerate(bg)))      # the room flares on every kick
+    if eyesy.auto_clear:      # the room flares on every kick
+        screen.fill(tuple(min(255, int(c + 22 * lvl * (1.0 if i == 2 else 0.6))) for i, c in enumerate(bg)))
     nb = 8 + int(eyesy.knob3 * 56.99)
     fill = clamp(0.25 + eyesy.knob1 * 0.72, 0.15, 1.0)
     slot = xres / float(nb)

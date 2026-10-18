@@ -116,9 +116,10 @@ def _draw(screen, eyesy):
         _state["canvas"] = pygame.Surface((xres, yres))
         _state["fade"] = pygame.Surface((xres, yres))
     canvas, fade = _state["canvas"], _state["fade"]
-    fade.fill(bg)
-    fade.set_alpha(66)                                        # short, steady trails (knob 2 no longer smears them)
-    canvas.blit(fade, (0, 0))
+    if eyesy.auto_clear:                                      # screen-clear off: nothing fades, so ribbons persist
+        fade.fill(bg)
+        fade.set_alpha(66)                                    # short, steady trails (knob 2 no longer smears them)
+        canvas.blit(fade, (0, 0))
 
 
     # ---- knobs ----

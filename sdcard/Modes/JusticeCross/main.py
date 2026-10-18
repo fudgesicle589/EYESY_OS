@@ -202,11 +202,12 @@ def draw(screen, eyesy):
         on_original = True                                       # the cross only ever swells, so it covers the art's own
 
     # --- background
-    screen.blit(_s["woman_orig"] if on_original else _s["bgs"][bgi], (0, 0))
-    if bgi == 0:
-        draw_dots(screen, t, (w - u) // 2, (h - u) // 2, u)
-    elif bgi == 3:
-        draw_glints(screen, t, (w - u) // 2, (h - u) // 2, u)
+    if eyesy.auto_clear:                                         # screen-clear off: the old picture stays and the cross piles on top
+        screen.blit(_s["woman_orig"] if on_original else _s["bgs"][bgi], (0, 0))
+        if bgi == 0:
+            draw_dots(screen, t, (w - u) // 2, (h - u) // 2, u)
+        elif bgi == 3:
+            draw_glints(screen, t, (w - u) // 2, (h - u) // 2, u)
 
     # --- cross, centred on the screen
     art, (acx, acy), art_h, outline = _s["art"][style]

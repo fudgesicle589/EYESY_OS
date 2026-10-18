@@ -112,7 +112,8 @@ def draw(screen, eyesy):
     base = (base[0], max(base[1], 0.85), 1.0)
     strobe = 1.0 + env[3] * 0.7
     spread = 0.6 + eyesy.knob3 * 0.4
-    screen.fill(rainbow(base, 0.5, 0.05 + beat * 0.08))
+    if eyesy.auto_clear:
+        screen.fill(rainbow(base, 0.5, 0.05 + beat * 0.08))
 
     def path(s):                                              # the tunnel's centerline wiggle
         return amp * math.sin(s * 0.45), amp * 0.7 * math.cos(s * 0.31)

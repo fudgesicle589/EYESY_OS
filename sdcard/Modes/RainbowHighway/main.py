@@ -51,9 +51,10 @@ def hash01(k, salt):
 def setup(screen, eyesy):
     pass
 
-# ---- adaptive quality: if this pattern runs slowly (say, on a Raspberry Pi) it quietly draws less detail ----
-_lod = {"q": 1.0, "avg": 0.0, "t0": 0.0, "rs": 1.0, "calm": 0}
-LOD_BUDGET = 0.016                                             # seconds of drawing per frame to stay under
+# ---- adaptive quality (Raspberry Pi): the picture is drawn small and scaled up, and it quietly gets smaller / simpler if frames run long ----
+_lod = {"q": 1.0, "avg": 0.0, "t0": 0.0, "tier": 1, "slow": 0, "calm": 0}
+SCALES = (1.0, 0.5, 0.34)                                      # how big the working picture is, as a fraction of the screen
+LOD_BUDGET = 0.026                                             # seconds of drawing per frame to stay under (the Eyesy runs at about 30 fps)
 
 def lod_start():
     _lod["t0"] = time.perf_counter()
@@ -61,27 +62,35 @@ def lod_start():
 def lod_end():
     dt = time.perf_counter() - _lod["t0"]
     _lod["avg"] = _lod["avg"] * 0.9 + dt * 0.1 if _lod["avg"] else dt
-    if _lod["avg"] > LOD_BUDGET:
-        _lod["q"] = max(0.2, _lod["q"] - 0.04)
-    elif _lod["avg"] < LOD_BUDGET * 0.55:
+    avg = _lod["avg"]
+    if avg > LOD_BUDGET:
+        _lod["q"] = max(0.5, _lod["q"] - 0.04)                 # fewer bays / segments first (floor keeps the tunnel long)
+        _lod["slow"] += 1
+    elif avg < LOD_BUDGET * 0.55:
         _lod["q"] = min(1.0, _lod["q"] + 0.01)
-    _lod["calm"] = _lod["calm"] + 1 if _lod["avg"] < LOD_BUDGET * 0.4 else 0
-
-def render_scale():
-    """1.0 normally; 0.5 (a quarter of the pixels) if the machine is really struggling, until it has coped easily for ~10 seconds"""
-    if _lod["rs"] == 1.0 and _lod["q"] < 0.4:
-        _lod["rs"], _lod["calm"] = 0.5, 0
-    elif _lod["rs"] == 0.5 and _lod["calm"] > 300:
-        _lod["rs"], _lod["calm"] = 1.0, 0
-    return _lod["rs"]
+        _lod["slow"] = 0
+    _lod["calm"] = _lod["calm"] + 1 if avg < LOD_BUDGET * 0.2 else 0
+    if _lod["slow"] > 30 and _lod["q"] <= 0.5 and _lod["tier"] < len(SCALES) - 1:
+        _lod["tier"] += 1                                      # still too slow with the least detail: draw smaller
+        _lod["slow"] = _lod["calm"] = 0
+        _lod["avg"] = 0.0
+    elif _lod["calm"] > 300 and _lod["tier"] > 1:
+        _lod["tier"] -= 1                                      # has coped very easily for ~10 s: sharpen up a step
+        _lod["calm"] = 0
+        _lod["avg"] = 0.0
 
 def draw(screen, eyesy):
     lod_start()
     _draw(screen, eyesy)
     lod_end()
 
+# sin/cos tables for the round windows, portals and arches (they were worked out for every shape, every frame)
+_CIRC = {n: [(math.sin(2 * math.pi * i / n), math.cos(2 * math.pi * i / n)) for i in range(n)] for n in (8, 10, 12, 16)}
+_ARC = {n: [(math.sin(math.pi * j / n), math.cos(math.pi * j / n)) for j in range(1, n)] for n in (6, 12)}
+_RING = {n: [(math.sin(math.pi * j / n), math.cos(math.pi * j / n)) for j in range(n + 1)] for n in (14, 26)}
+
 def _draw(screen, eyesy):
-    xres, yres = eyesy.xres, eyesy.yres
+    full_x, full_y = eyesy.xres, eyesy.yres
     now = time.time()
     if _state["t0"] is None:
         _state["t0"] = _state["last"] = now
@@ -102,6 +111,19 @@ def _draw(screen, eyesy):
     dist = _state["dist"]
     phase = dist % PERIOD
     base_index = int(dist // PERIOD)
+    if not eyesy.auto_clear:                                   # screen-clear off: the last picture holds still on the screen (and costs nothing)
+        return
+
+    # ---- work on a smaller picture and scale it up to the screen (a lot fewer pixels to fill) ----
+    rs = SCALES[_lod["tier"]]
+    xres, yres = max(64, int(full_x * rs)), max(36, int(full_y * rs))
+    if rs == 1.0:
+        screen_out, screen = None, screen
+    else:
+        small = _state.get("small")
+        if small is None or small.get_size() != (xres, yres):
+            small = _state["small"] = pygame.Surface((xres, yres))
+        screen_out, screen = screen, small
 
     # ---- palette ----
     haze = lerp3(shade(sky_base, 0.9), hsv(h0 + 0.85, 0.5, 0.85), 0.45)
@@ -117,8 +139,8 @@ def _draw(screen, eyesy):
 
     # ---- camera ----
     q = _lod["q"]
-    nmod = 6 + int(9 * q)                                 # fewer bays ahead of you when the machine is struggling
-    seg_arch = 12 if q > 0.7 else 6
+    nmod = 8 + int(7 * q)                                 # fewer bays ahead of you when the machine is struggling
+    seg_arch = 12 if (q > 0.7 and rs > 0.4) else 6
     f = yres * zoom
     ox, oy = xres / 2.0, yres * HORIZON
     kappa = steer * 0.010                                 # how much the tunnel bends
@@ -130,14 +152,22 @@ def _draw(screen, eyesy):
 
     def project(pts3):
         out = []
+        app = out.append
+        x0 = y0 = 1e9
+        x1 = y1 = -1e9
         for x, y, z in pts3:
             if z < NEAR:
                 z = NEAR
             x += kappa * z * z
             y += 0.35 * sin((z + dist) * 0.13) - cam_h    # gentle hills, moving with the world
-            sx, sy = f * x / z, -f * y / z
-            out.append((ox + sx * cr - sy * sr, oy + sx * sr + sy * cr))
-        return out
+            k = f / z                                     # perspective, then the camera roll, in one go
+            px, py = ox + k * (x * cr + y * sr), oy + k * (x * sr - y * cr)
+            app((px, py))
+            if px < x0: x0 = px
+            if px > x1: x1 = px
+            if py < y0: y0 = py
+            if py > y1: y1 = py
+        return out, not (x1 < 0 or x0 > xres or y1 < 0 or y0 > yres)       # (points, is any of it on the screen)
 
     def rot(px, py):
         dx, dy = px - ox, py - oy
@@ -163,22 +193,17 @@ def _draw(screen, eyesy):
         pygame.draw.circle(screen, ic(lerp3(haze, pal["sun"], 0.18 + 0.2 * i)), (int(sun_c[0]), int(sun_c[1])), int(sun_r * rr))
     band_w = yres * 0.017
     r_top = oy * 0.93                                      # the rainbow's outer edge stays below the top of the screen
-    rseg = 48 if q > 0.6 else 24
     bow_mid = lerp3(sky_top, haze, 0.5)
-    for i, hh in enumerate((0.0, 0.08, 0.16, 0.36, 0.55, 0.75)):
-        r_out = r_top - i * band_w
-        r_in = r_out - band_w
+    bow_c = (int(ox), int(oy))
+    ring_w = max(1, int(band_w + 1.5))
+    for i, hh in enumerate((0.0, 0.08, 0.16, 0.36, 0.55, 0.75)):      # six full rings round the horizon (a ring is its own rotation)
         col = lerp3(bow_mid, hsv(hh, 0.55, 1.0), 0.85 + 0.15 * sin(elapsed * 1.3 + i))
-        for half in (0, 1):                                    # the upper half, then the lower half: together a full circle
-            a0 = math.pi * half
-            outer = [rot(ox + r_out * cos(a0 + math.pi * j / rseg), oy - r_out * sin(a0 + math.pi * j / rseg)) for j in range(rseg + 1)]
-            inner = [rot(ox + r_in * cos(a0 + math.pi * j / rseg), oy - r_in * sin(a0 + math.pi * j / rseg)) for j in range(rseg, -1, -1)]
-            fill_poly(screen, ic(col), outer + inner)
+        pygame.draw.circle(screen, ic(col), bow_c, max(2, int(r_top - i * band_w)), ring_w)
     n = 18
     spin = elapsed * 0.25
     burst = []
     pulse = 1.0 + 0.05 * sin(elapsed * 2.2)
-    for i in range(n * 2):
+    for i in range(n * 2):                                  # (18 spikes)
         a = spin + math.pi * i / n
         rr = sun_r * (1.0 if i % 2 == 0 else 0.72) * pulse
         burst.append((sun_c[0] + rr * cos(a), sun_c[1] + rr * sin(a)))
@@ -206,11 +231,13 @@ def _draw(screen, eyesy):
         def dim(c, m): return (int(c[0] * m), int(c[1] * m), int(c[2] * m))
         oa = clamp((zm - 7.0) / 30.0) * 0.8
         outline_c = (int(OUTLINE[0] + (haze[0] - OUTLINE[0]) * oa), int(OUTLINE[1] + (haze[1] - OUTLINE[1]) * oa), int(OUTLINE[2] + (haze[2] - OUTLINE[2]) * oa))
-        line_w = 2 if zm < 14 else 1
-        outlines = zm < 26 or q > 0.6                     # the far bays are too small for an outline to matter
+        line_w = max(1, int(round((2 if zm < 14 else 1) * rs)))
+        outlines = zm < (26 if rs > 0.7 else 18)          # the far bays are too small for an outline to matter
 
         def poly(pts3, color):
-            pts = project(pts3)
+            pts, seen = project(pts3)
+            if not seen:                                  # entirely off the screen: nothing to draw
+                return
             fill_poly(screen, color, pts)
             if outlines:
                 fill_poly(screen, outline_c, pts, line_w)
@@ -233,15 +260,16 @@ def _draw(screen, eyesy):
             poly([(s_ * XB, yT1, z0c), (s_ * XB, yT2, z0c), (s_ * XB, yT2, z1), (s_ * XB, yT1, z1)], dim(wall, 0.85))
             ym = (yT1 + yT2) / 2
             wseg = 12 if q > 0.7 else 8
+            wtab = _CIRC[wseg]
             for zc in (z0 + PERIOD * 0.28, z0 + PERIOD * 0.72):
                 if zc > NEAR:
-                    poly([(s_ * XB, ym + 0.42 * sin(2 * math.pi * i / wseg), zc + 0.42 * cos(2 * math.pi * i / wseg)) for i in range(wseg)], col["hole"])
+                    poly([(s_ * XB, ym + 0.42 * sn_, zc + 0.42 * cs_) for sn_, cs_ in wtab], col["hole"])
             xc, yT3 = XB + 2.6, yT2 + 2.2 + 1.2 * h1
             poly([(s_ * xc, yT2, z0c), (s_ * xc, yT3, z0c), (s_ * xc, yT3, z1), (s_ * xc, yT2, z1)], dim(col["far"], 0.9))
             yc3 = (yT2 + yT3) / 2
             if zm > NEAR:
                 w3 = 16 if q > 0.7 else 10
-                poly([(s_ * xc, yc3 + 0.9 * sin(2 * math.pi * i / w3), zm + 0.9 * cos(2 * math.pi * i / w3)) for i in range(w3)], col["hole"])
+                poly([(s_ * xc, yc3 + 0.9 * sn_, zm + 0.9 * cs_) for sn_, cs_ in _CIRC[w3]], col["hole"])
             if yT2 < cam_h - 0.1:                         # its flat top, when we can see it
                 poly([(s_ * XB, yT2, z0c), (s_ * (XB + 2.4), yT2, z0c), (s_ * (XB + 2.4), yT2, z1), (s_ * XB, yT2, z1)], col["top"])
 
@@ -263,23 +291,24 @@ def _draw(screen, eyesy):
             zc = (a + b) / 2
             if b > NEAR:
                 arch = [(s_ * XA, -4.0, a), (s_ * XA, ys, a)]
-                arch += [(s_ * XA, ys + r_arch * sin(math.pi * j / seg_arch), zc - r_arch * cos(math.pi * j / seg_arch)) for j in range(1, seg_arch)]
+                atab = _ARC[seg_arch]
+                arch += [(s_ * XA, ys + r_arch * sn_, zc - r_arch * cs_) for sn_, cs_ in atab]
                 arch += [(s_ * XA, ys, b), (s_ * XA, -4.0, b)]
                 poly(arch, col["hole"])
                 xi = s_ * (XA + 0.9)                            # a second, lighter arch set back inside the opening
                 r2 = r_arch * 0.72
                 a2, b2, zc2 = zc - r2 + 0.35, zc + r2 + 0.35, zc + 0.35
                 inner = [(xi, -4.0, a2), (xi, ys, a2)]
-                inner += [(xi, ys + r2 * sin(math.pi * j / seg_arch), zc2 - r2 * cos(math.pi * j / seg_arch)) for j in range(1, seg_arch)]
+                inner += [(xi, ys + r2 * sn_, zc2 - r2 * cs_) for sn_, cs_ in atab]
                 inner += [(xi, ys, b2), (xi, -4.0, b2)]
                 poly(inner, col["jamb"])
 
         # overhead ring every few bays
         if gi % 7 == 0 and z0 > NEAR:
             R_out, R_in, cy = 4.5, 3.9, 1.7
-            pseg = 26 if q > 0.6 else 14
-            outer = [(R_out * cos(math.pi * j / pseg), cy + R_out * sin(math.pi * j / pseg), z0) for j in range(pseg + 1)]
-            inner = [(R_in * cos(math.pi * j / pseg), cy + R_in * sin(math.pi * j / pseg), z0) for j in range(pseg, -1, -1)]
+            rtab = _RING[26 if q > 0.6 else 14]
+            outer = [(R_out * cs_, cy + R_out * sn_, z0) for sn_, cs_ in rtab]
+            inner = [(R_in * cs_, cy + R_in * sn_, z0) for sn_, cs_ in rtab[::-1]]
             poly(outer + inner, col["portal"])
 
     # ---- fade in from black when the mode starts ----
@@ -290,3 +319,6 @@ def _draw(screen, eyesy):
             veil = _state["veil"] = pygame.Surface((xres, yres))
         veil.set_alpha(int(255 * (1 - fade)))
         screen.blit(veil, (0, 0))
+
+    if screen_out is not None:                             # up to the real screen (straight into it: no temporary picture)
+        pygame.transform.scale(screen, (full_x, full_y), screen_out)

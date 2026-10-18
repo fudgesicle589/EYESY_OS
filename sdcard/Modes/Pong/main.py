@@ -71,7 +71,8 @@ def draw(screen, eyesy):
     bg = eyesy.color_picker_bg(eyesy.knob5)
     c_left = eyesy.color_picker(eyesy.knob3)
     c_right = eyesy.color_picker(eyesy.knob4)
-    screen.fill(bg)
+    if eyesy.auto_clear:
+        screen.fill(bg)
 
     # paddles follow their knobs directly
     pw = max(8, xres // 60)

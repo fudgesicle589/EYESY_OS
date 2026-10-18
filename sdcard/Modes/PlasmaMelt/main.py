@@ -104,6 +104,8 @@ def _draw(screen, eyesy):
     flow = (eyesy.knob2 - 0.5) * 2
     _state["t"] += dt * (flow * 3.0 + clamp(mom[1] * 25.0, -8.0, 8.0))     # a flick shoves the liquid along, even when the knob is in the frozen spot
     t = _state["t"]
+    if not eyesy.auto_clear:                                  # screen-clear off: the last picture holds still on the screen
+        return
 
     # the plasma is worked out on a small grid, then scaled up smoothly; the grid shrinks if the machine is slow
     q = _lod["q"]

@@ -255,33 +255,34 @@ def draw(screen, eyesy):
     elif z1 == 5: zoom, rot = 1.02, math.sin(tm) * 2
     else:         zoom, rot = 1.045, 3.0 * math.sin(tm * 0.9) + 2.0 * cat1
     zoom += beat * 0.035 * (0.4 + 0.6 * t1)
-    if abs(rot) < 0.05:
-        sz = (max(2, int(BW * zoom)), max(2, int(BH * zoom)))
-        tmp = pygame.transform.scale(buf, sz)
-    else:
-        tmp = pygame.transform.rotozoom(buf, rot, zoom)
-    buf.blit(tmp, ((BW - tmp.get_width()) // 2 + dx, (BH - tmp.get_height()) // 2 + dy))
-    if z1 == 5:
-        mirror(buf, 0 if t1 < 0.33 else (1 if t1 < 0.66 else 2), S["frame"] % 2 == 0)
-    fade = 240 + int(12 * math.sin(tm * 0.2) ** 2)
-    buf.fill((fade, fade, fade), special_flags=pygame.BLEND_RGB_MULT)
-    buf.fill((1, 1, 1), special_flags=pygame.BLEND_RGB_SUB)
+    if eyesy.auto_clear:                                            # screen-clear off: the old frame is frozen in place (no zoom, spin or fade)
+        if abs(rot) < 0.05:
+            sz = (max(2, int(BW * zoom)), max(2, int(BH * zoom)))
+            tmp = pygame.transform.scale(buf, sz)
+        else:
+            tmp = pygame.transform.rotozoom(buf, rot, zoom)
+        buf.blit(tmp, ((BW - tmp.get_width()) // 2 + dx, (BH - tmp.get_height()) // 2 + dy))
+        if z1 == 5:
+            mirror(buf, 0 if t1 < 0.33 else (1 if t1 < 0.66 else 2), S["frame"] % 2 == 0)
+        fade = 240 + int(12 * math.sin(tm * 0.2) ** 2)
+        buf.fill((fade, fade, fade), special_flags=pygame.BLEND_RGB_MULT)
+        buf.fill((1, 1, 1), special_flags=pygame.BLEND_RGB_SUB)
 
-    # ---- colour rotation of the feedback (knob 4) ----
-    if z4 in (0, 5, 6):
-        period = 3 + int(10 * (1.0 - t4)) if z4 == 0 else 5
-        if S["frame"] % period == 0:
-            chan_shift(buf, 1 if z4 != 5 else 2)
-    elif z4 == 3 and S["frame"] % 6 == 0:
-        buf.fill((8, 0, 0), special_flags=pygame.BLEND_RGB_SUB)         # fire keeps the reds, loses the blues
+        # ---- colour rotation of the feedback (knob 4) ----
+        if z4 in (0, 5, 6):
+            period = 3 + int(10 * (1.0 - t4)) if z4 == 0 else 5
+            if S["frame"] % period == 0:
+                chan_shift(buf, 1 if z4 != 5 else 2)
+        elif z4 == 3 and S["frame"] % 6 == 0:
+            buf.fill((8, 0, 0), special_flags=pygame.BLEND_RGB_SUB)         # fire keeps the reds, loses the blues
 
-    # ---- tiled screens (knob 5, zone 2): the picture shrinks and repeats inside itself ----
-    if z5 == 2:
-        n = 2 + int(t5 * 2.99)
-        small = pygame.transform.scale(buf, (BW // n, BH // n))
-        for gy in range(n):
-            for gx in range(n):
-                buf.blit(small, (gx * (BW // n), gy * (BH // n)))
+        # ---- tiled screens (knob 5, zone 2): the picture shrinks and repeats inside itself ----
+        if z5 == 2:
+            n = 2 + int(t5 * 2.99)
+            small = pygame.transform.scale(buf, (BW // n, BH // n))
+            for gy in range(n):
+                for gx in range(n):
+                    buf.blit(small, (gx * (BW // n), gy * (BH // n)))
 
     # ---- 2. fresh stuff (knob 2) ----
     big = min(BW, BH) * 0.5

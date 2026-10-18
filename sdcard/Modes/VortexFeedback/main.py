@@ -145,15 +145,16 @@ def _draw(screen, eyesy):
     # ---- feedback: zoom and twist the last frame back into itself ----
     tw = math.radians(abs(twist))
     zoom = max(zoom, (math.cos(tw) + (bw / float(bh)) * math.sin(tw)) * 1.03)     # a hard twist needs a little extra zoom to avoid black corners
-    rz = pygame.transform.rotozoom(buf, twist, zoom)
-    tx = ox + (bw / 2.0 - ox) * zoom                          # zoom about the wandering centre, still covering the whole screen
-    ty = oy + (bh / 2.0 - oy) * zoom
-    buf.blit(rz, rz.get_rect(center=(int(tx), int(ty))))
-    keep = 236 + int(eyesy.knob5 * 18)                        # knob 5: crisp short trails up to long smeared ones
-    buf.fill((keep, keep, keep), special_flags=pygame.BLEND_RGB_MULT)                                   # fade a little
     _state["n"] = _state.get("n", 0) + 1
-    if _state["n"] % 2 == 0:                                                                                     # ...toward the background (every other frame, twice as strongly)
-        buf.fill((int(bg[0] * 0.018), int(bg[1] * 0.018), int(bg[2] * 0.018)), special_flags=pygame.BLEND_RGB_ADD)
+    if eyesy.auto_clear:                                      # screen-clear off: the old frame is frozen in place (no zoom, twist or fade)
+        rz = pygame.transform.rotozoom(buf, twist, zoom)
+        tx = ox + (bw / 2.0 - ox) * zoom                      # zoom about the wandering centre, still covering the whole screen
+        ty = oy + (bh / 2.0 - oy) * zoom
+        buf.blit(rz, rz.get_rect(center=(int(tx), int(ty))))
+        keep = 236 + int(eyesy.knob5 * 18)                    # knob 5: crisp short trails up to long smeared ones
+        buf.fill((keep, keep, keep), special_flags=pygame.BLEND_RGB_MULT)                               # fade a little
+        if _state["n"] % 2 == 0:                                                                         # ...toward the background (every other frame, twice as strongly)
+            buf.fill((int(bg[0] * 0.018), int(bg[1] * 0.018), int(bg[2] * 0.018)), special_flags=pygame.BLEND_RGB_ADD)
 
     # ---- sparkles all over the screen: they get smeared along the flow, so you can see it react at once ----
     for _ in range(sparkles):

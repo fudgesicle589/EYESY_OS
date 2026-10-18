@@ -240,6 +240,7 @@ def impact(power, tips):
     spawn_chalk(tips + [(-20.0, 0.0)], 10 + int(26 * power), 0.7 + 0.7 * power)
 
 # ---------------------------------------------------------------- draw
+_scratch = pygame.Surface((1, 1))                      # screen-clear off: scenery is drawn here so the old picture stays
 def draw(screen, eyesy):
     if not _S:
         reset()
@@ -363,11 +364,12 @@ def draw(screen, eyesy):
     if "pending_impact" in _S:
         impact(_S.pop("pending_impact"), tips_world)
 
+    bgs = screen if eyesy.auto_clear else _scratch              # screen-clear off: backdrop and wall go nowhere, so the old picture stays
     # ================================================================ background
     bands = 14
     for i in range(bands):
         c = mix(bg_dark, bg_deep, i / (bands - 1.0))
-        pygame.draw.rect(screen, c, (0, int(i * yres / bands), xres, int(yres / bands) + 2))
+        pygame.draw.rect(bgs, c, (0, int(i * yres / bands), xres, int(yres / bands) + 2))
     # bokeh gym lights drift behind the wall
     for b in _S["bokeh"]:
         b[0] -= b[3] * dt * 1.2
@@ -375,8 +377,8 @@ def draw(screen, eyesy):
             b[0] = 420
         bx, by = P(b[0] * 0.7 + cam_x * 0.3, b[1] + math.sin(t * 0.4 + b[4] * 9) * 6)
         c = mix(bg_dark, mix(bg, (255, 255, 255), 0.35), 0.35 + 0.35 * b[4] + 0.2 * abs(bg_swing) * 8)
-        pygame.draw.circle(screen, mix(bg_dark, c, 0.3), (int(bx), int(by)), int(b[2] * U))
-        pygame.draw.circle(screen, mix(bg_dark, c, 0.7), (int(bx), int(by)), int(b[2] * U), max(1, int(U * 1.2)))
+        pygame.draw.circle(bgs, mix(bg_dark, c, 0.3), (int(bx), int(by)), int(b[2] * U))
+        pygame.draw.circle(bgs, mix(bg_dark, c, 0.7), (int(bx), int(by)), int(b[2] * U), max(1, int(U * 1.2)))
     # floating chalk motes
     for m in _S["motes"]:
         m[0] += math.sin(t * 0.7 + m[3]) * 6.0 * dt
@@ -385,7 +387,7 @@ def draw(screen, eyesy):
             m[1] = 330
             m[0] = rng.uniform(-600, 300)
         mx, my = P(m[0], m[1])
-        pygame.draw.circle(screen, mix(bg_dark, (255, 255, 255), 0.35), (int(mx), int(my)), max(1, int(m[2] * U * 0.7)))
+        pygame.draw.circle(bgs, mix(bg_dark, (255, 255, 255), 0.35), (int(mx), int(my)), max(1, int(m[2] * U * 0.7)))
     # shockwaves rolling out of the pocket
     rings = _S["rings"]
     for i in range(len(rings) - 1, -1, -1):
@@ -396,30 +398,30 @@ def draw(screen, eyesy):
         rad = rings[i] * 620.0 * U
         k = (1.0 - rings[i] / 1.3) ** 1.5
         cx, cy = P(80.0, 0.0)
-        pygame.draw.circle(screen, mix(bg_dark, fg, 0.7 * k), (int(cx), int(cy)), int(rad), max(1, int(5 * U * k)))
-        pygame.draw.circle(screen, mix(bg_dark, fg_hi, 0.9 * k), (int(cx), int(cy)), int(rad * 0.97), 1)
+        pygame.draw.circle(bgs, mix(bg_dark, fg, 0.7 * k), (int(cx), int(cy)), int(rad), max(1, int(5 * U * k)))
+        pygame.draw.circle(bgs, mix(bg_dark, fg_hi, 0.9 * k), (int(cx), int(cy)), int(rad * 0.97), 1)
 
     # ================================================================ the wall (a cross-section)
     wx0, wx1 = P(WALL_X, 0)[0], P(WALL_BACK, 0)[0]
     ply = mix(scale_c(bg, 0.5), (92, 70, 54), 0.5)
-    pygame.draw.rect(screen, scale_c(ply, 0.55), (int(wx0), 0, int(wx1 - wx0), yres))
+    pygame.draw.rect(bgs, scale_c(ply, 0.55), (int(wx0), 0, int(wx1 - wx0), yres))
     for gx in (0.3, 0.62):                       # plywood layers
         lx = wx0 + (wx1 - wx0) * gx
-        pygame.draw.line(screen, scale_c(ply, 0.35), (lx, 0), (lx, yres), 1)
-    pygame.draw.rect(screen, ply, (int(wx0), 0, int((wx1 - wx0) * 0.3), yres))
+        pygame.draw.line(bgs, scale_c(ply, 0.35), (lx, 0), (lx, yres), 1)
+    pygame.draw.rect(bgs, ply, (int(wx0), 0, int((wx1 - wx0) * 0.3), yres))
     # T-nut grid: a bolt hole every 90 units
     for yy in range(-900, 901, 90):
         a = P(WALL_X, yy)
         b = P(WALL_BACK, yy)
         if -20 < a[1] < yres + 20:
-            pygame.draw.line(screen, (14, 10, 12), a, b, max(1, int(3 * U)))
-            pygame.draw.rect(screen, (150, 150, 158), (int(b[0]), int(b[1] - 6 * U), max(2, int(7 * U)), int(12 * U)))
+            pygame.draw.line(bgs, (14, 10, 12), a, b, max(1, int(3 * U)))
+            pygame.draw.rect(bgs, (150, 150, 158), (int(b[0]), int(b[1] - 6 * U), max(2, int(7 * U)), int(12 * U)))
     # framing studs behind the wall
     for sx_, sw in ((WALL_BACK + 24, 34), (WALL_BACK + 150, 34)):
         a = P(sx_, 0)
-        pygame.draw.rect(screen, scale_c(ply, 0.35), (int(a[0]), 0, int(sw * U), yres))
-        pygame.draw.rect(screen, scale_c(ply, 0.55), (int(a[0]), 0, int(sw * U), yres), 1)
-    pygame.draw.rect(screen, mix(bg_dark, (255, 255, 255), 0.0), (int(P(WALL_BACK + 220, 0)[0]), 0, xres, yres))
+        pygame.draw.rect(bgs, scale_c(ply, 0.35), (int(a[0]), 0, int(sw * U), yres))
+        pygame.draw.rect(bgs, scale_c(ply, 0.55), (int(a[0]), 0, int(sw * U), yres), 1)
+    pygame.draw.rect(bgs, mix(bg_dark, (255, 255, 255), 0.0), (int(P(WALL_BACK + 220, 0)[0]), 0, xres, yres))
     # neighbouring holds stuck to the wall (also in section), lit by the beat
     for i, (hy_, hh, hd, k) in enumerate(_S["holds"]):
         col = hsv(0.0 + k * 0.137 + t * 0.02 + eyesy.knob4 * 0.0, 0.75, 0.8)
@@ -427,10 +429,10 @@ def draw(screen, eyesy):
         pts = [(WALL_X, hy_ - hh / 2), (WALL_X - hd * 0.5, hy_ - hh * 0.5 - 4), (WALL_X - hd, hy_ - hh * 0.25), (WALL_X - hd * 0.9, hy_ + hh * 0.3),
                (WALL_X - hd * 0.3, hy_ + hh * 0.5 + 3), (WALL_X, hy_ + hh / 2)]
         sp = world_poly(P, pts)
-        pygame.draw.polygon(screen, face, sp)
-        pygame.draw.polygon(screen, mix(face, (255, 255, 255), 0.5), sp, max(1, int(1.5 * U)))
+        pygame.draw.polygon(bgs, face, sp)
+        pygame.draw.polygon(bgs, mix(face, (255, 255, 255), 0.5), sp, max(1, int(1.5 * U)))
     # wall face edge
-    pygame.draw.line(screen, mix(ply, (255, 255, 255), 0.35), (wx0, 0), (wx0, yres), max(1, int(2 * U)))
+    pygame.draw.line(bgs, mix(ply, (255, 255, 255), 0.35), (wx0, 0), (wx0, yres), max(1, int(2 * U)))
 
     # ================================================================ the pocket
     cav = world_poly(P, CAVITY)

@@ -354,6 +354,7 @@ SUN_TOP = (150, 60, 255)
 SUN_BOT = (255, 70, 220)
 
 _bg_cache = {"key": None, "surf": None}
+_scratch = pygame.Surface((1, 1))
 _scroll = {"pos": 0.0, "dist": 0.0, "t": None, "dt": None}
 _car_surf = {"size": None, "surf": None}
 
@@ -742,8 +743,10 @@ def _draw(screen, eyesy):
     key = (xres, yres, base_bg)
     if _bg_cache["key"] != key:
         _bg_cache["key"], _bg_cache["surf"] = key, build_background(xres, yres, base_bg)
-    screen.blit(_bg_cache["surf"], (0, 0))
-    draw_clouds(screen, xres, yres, decal)
+    # screen-clear off: the scenery (sky, clouds, road) goes to a 1x1 scratch surface so the old picture stays and the rest piles on top
+    scenery = screen if eyesy.auto_clear else _scratch
+    scenery.blit(_bg_cache["surf"], (0, 0))
+    draw_clouds(scenery, xres, yres, decal)
 
     # ---- camera ----
     focal = yres * 2.1
@@ -762,7 +765,7 @@ def _draw(screen, eyesy):
     def project(p):
         return (ox + p[0] * focal / p[2], oy - p[1] * focal / p[2])
 
-    pts = draw_road(screen, xres, yres, focal, S, yaw, steer, speed, palette(base_bg))
+    pts = draw_road(scenery, xres, yres, focal, S, yaw, steer, speed, palette(base_bg))
     trees = palm_trees(pts, xres, yres, focal, S)
     for t in trees:                                # trees behind the car go under it
         if t[0] >= CAM_DIST: blit_tree(screen, t, decal)
