@@ -67,7 +67,7 @@ def setup(screen, eyesy):
 
 # ---- adaptive quality: if this pattern runs slowly (say, on a Raspberry Pi) it quietly draws less detail ----
 _lod = {"q": 1.0, "avg": 0.0, "t0": 0.0, "rs": 1.0, "calm": 0}
-LOD_BUDGET = 0.016                                             # seconds of drawing per frame to stay under
+LOD_BUDGET = 0.014                                             # seconds of drawing per frame to stay under
 
 def lod_start():
     _lod["t0"] = time.perf_counter()
@@ -83,10 +83,11 @@ def lod_end():
 
 def render_scale():
     """1.0 normally; 0.5 (a quarter of the pixels) if the machine is really struggling, until it has coped easily for ~10 seconds"""
-    if _lod["rs"] == 1.0 and _lod["q"] < 0.4:
-        _lod["rs"], _lod["calm"] = 0.5, 0
-    elif _lod["rs"] == 0.5 and _lod["calm"] > 300:
-        _lod["rs"], _lod["calm"] = 1.0, 0
+    if _lod["rs"] > 0.35 and _lod["q"] < 0.4:
+        _lod["rs"], _lod["calm"] = (0.5 if _lod["rs"] == 1.0 else 0.35), 0
+        _lod["q"] = 0.6                                        # smaller picture: give the detail back a bit
+    elif _lod["rs"] < 1.0 and _lod["calm"] > 300:
+        _lod["rs"], _lod["calm"] = (0.5 if _lod["rs"] == 0.35 else 1.0), 0
     return _lod["rs"]
 
 def draw(screen, eyesy):
@@ -95,7 +96,16 @@ def draw(screen, eyesy):
     lod_end()
 
 def _draw(screen, eyesy):
-    xres, yres = eyesy.xres, eyesy.yres
+    full_x, full_y = eyesy.xres, eyesy.yres
+    rs = render_scale()                                        # when the machine struggles the tunnel is drawn on a smaller picture and scaled up
+    screen_out = None
+    xres, yres = full_x, full_y
+    if rs < 1.0:
+        xres, yres = max(64, int(full_x * rs)), max(36, int(full_y * rs))
+        small = _state.get("small")
+        if small is None or small.get_size() != (xres, yres):
+            small = _state["small"] = pygame.Surface((xres, yres))
+        screen_out, screen = screen, small
     now = time.time()
     if _state["last"] is None:
         _state["last"] = now
@@ -124,7 +134,7 @@ def _draw(screen, eyesy):
     cx, cy = xres / 2.0, yres / 2.0
     diag = math.hypot(xres, yres)
     q = 0.74 + 0.18 * eyesy.knob5                             # each level is this much smaller than the last (knob 5: tight rings to wide steps)
-    K = int(14 + 22 * _lod["q"])                              # fewer levels when the machine is struggling
+    K = int(10 + 16 * _lod["q"])                              # fewer levels when the machine is struggling
     R0 = diag * 0.72 * (1.0 + 0.03 * math.sin(t * 3.0))
     if eyesy.auto_clear:
         screen.fill(bg)
@@ -145,8 +155,10 @@ def _draw(screen, eyesy):
         ox, oy = cx + sway[0] * depth, cy + sway[1] * depth
         pts = [(ox + r * math.cos(ang + 2 * math.pi * s / n), oy + r * math.sin(ang + 2 * math.pi * s / n)) for s in range(n)]
         pygame.draw.polygon(screen, fill, pts)
-        pygame.draw.polygon(screen, edge, pts, max(1, int(min(6, 1 + r * 0.012))))
-        if r > 12:
+        pygame.draw.polygon(screen, edge, pts, max(1, int(min(6, 1 + r * 0.012) * rs)))
+        if r > 12 and _lod["q"] > 0.5:
             for pt in pts:
                 pygame.draw.circle(screen, edge, (int(pt[0]), int(pt[1])), max(2, int(r * 0.018)))
     pygame.draw.circle(screen, hsv(h0 + 0.5, 0.5, 1.0), (int(cx + sway[0]), int(cy + sway[1])), int(4 + 3 * math.sin(t * 5.0)))
+    if screen_out is not None:
+        pygame.transform.scale(screen, (full_x, full_y), screen_out)

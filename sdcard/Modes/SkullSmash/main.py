@@ -114,6 +114,20 @@ def _loft(rings):
 def _ring(poly, scale, z, cx=0.0, cy=0.0):
     return [(cx + (x - cx) * scale, cy + (y - cy) * scale, z) for x, y in poly]
 
+def _meta(mesh):
+    """[(face, unit normal, centre)] in the mesh's own coordinates"""
+    verts, faces = mesh
+    out = []
+    for f in faces:
+        p0, p1, p2 = verts[f[0]], verts[f[1]], verts[f[2]]
+        ux, uy, uz = p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]
+        vx, vy, vz = p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]
+        n = (uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
+        ln = math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) or 1.0
+        k = 1.0 / len(f)
+        out.append((f, (n[0] / ln, n[1] / ln, n[2] / ln), (sum(verts[i][0] for i in f) * k, sum(verts[i][1] for i in f) * k, sum(verts[i][2] for i in f) * k)))
+    return out
+
 SKULL = {}
 def build_skull():
     S = 1.1
@@ -136,6 +150,9 @@ def build_skull():
         pods.append(_loft([a, b]))
     SKULL["pods"] = pods
     SKULL["S"] = S
+    SKULL["cran"] = SKULL["cran"] + (_meta(SKULL["cran"]),)     # the faces' own normals and centres, worked out once (they only need rotating each frame)
+    SKULL["jaw"] = SKULL["jaw"] + (_meta(SKULL["jaw"]),)
+    SKULL["pods"] = [m + (_meta(m),) for m in pods]
 
 # ---------------------------------------------------------------- state
 def new_hand():
@@ -183,10 +200,41 @@ def impact(h, power):
 
 # ---------------------------------------------------------------- draw
 _scratch = pygame.Surface((1, 1))                      # screen-clear off: scenery is drawn here so the old picture stays
+
+# ---- adaptive quality (Raspberry Pi): if frames run long it drops the glow, outlines and extra lines, then draws on a smaller picture ----
+_lod = {"q": 1.0, "avg": 0.0, "rs": 1.0, "calm": 0, "slow": 0}
+LOD_BUDGET = 0.026
+
 def draw(screen, eyesy):
+    t0 = time.perf_counter()
+    rs = _lod["rs"] if eyesy.auto_clear else 1.0               # (with screen-clear off the picture must be drawn straight onto the screen)
+    if rs < 1.0:
+        w, h = max(64, int(eyesy.xres * rs)), max(36, int(eyesy.yres * rs))
+        small = _S.get("lowres")
+        if small is None or small.get_size() != (w, h):
+            small = _S["lowres"] = pygame.Surface((w, h), 0, screen)
+        _draw(small, eyesy, w, h)
+        pygame.transform.scale(small, (eyesy.xres, eyesy.yres), screen)
+    else:
+        _draw(screen, eyesy, eyesy.xres, eyesy.yres)
+    dt = time.perf_counter() - t0
+    _lod["avg"] = _lod["avg"] * 0.9 + dt * 0.1 if _lod["avg"] else dt
+    if _lod["avg"] > LOD_BUDGET:
+        _lod["q"] = max(0.2, _lod["q"] - 0.04)
+        _lod["slow"] += 1
+    elif _lod["avg"] < LOD_BUDGET * 0.55:
+        _lod["q"] = min(1.0, _lod["q"] + 0.01)
+        _lod["slow"] = 0
+    _lod["calm"] = _lod["calm"] + 1 if _lod["avg"] < LOD_BUDGET * 0.3 else 0
+    if _lod["slow"] > 20 and _lod["q"] <= 0.3 and _lod["rs"] > 0.5:
+        _lod["rs"], _lod["slow"], _lod["avg"], _lod["q"] = 0.5, 0, 0.0, 0.6      # still too slow with the least detail: draw smaller
+    elif _lod["calm"] > 300 and _lod["rs"] < 1.0:
+        _lod["rs"], _lod["calm"], _lod["avg"] = 1.0, 0, 0.0
+
+def _draw(screen, eyesy, xres, yres):
     if not SKULL:
         build_skull()
-    xres, yres = eyesy.xres, eyesy.yres
+    lq = _lod["q"]
     now = time.time()
     if _S["last"] is None:
         _S["last"] = now
@@ -308,29 +356,38 @@ def draw(screen, eyesy):
         cen = (sum(wv[i][0] for i in idx) * k, sum(wv[i][1] for i in idx) * k, sum(wv[i][2] for i in idx) * k)
         return (n[0] / ln, n[1] / ln, n[2] / ln), cen
 
-    def add_mesh(g, verts, faces, R, T, hue, hot, dy=0.0):
+    # faces that point away from the camera are never drawn, so they are dropped here; the colour of a face (col None) is only
+    # worked out when it is actually drawn, by the group's own "shade" function
+    def add_mesh(g, mesh, R, T, hue, hot, dy=0.0):
+        verts, _faces, meta = mesh
         base = len(g["v"])
         wv = []
         for (x, y, z) in verts:
             p = mv(R, (x, y + dy, z))
             wv.append((p[0] + T[0], p[1] + T[1], p[2] + T[2]))
         g["v"].extend(wv)
+        g["shade"] = lambda n: chrome_color(n, hue, hot)
         edge = hsv(hue, 0.5, 0.45 + 0.4 * hot)
-        for f in faces:
-            n, cen = face_info(wv, f)
-            g["items"].append(("f", cam_depth(cen), tuple(base + i for i in f), chrome_color(n, hue, hot), edge, n, cen))
+        for f, nl, cl in meta:
+            n = mv(R, nl)
+            c = mv(R, (cl[0], cl[1] + dy, cl[2]))
+            cen = (c[0] + T[0], c[1] + T[1], c[2] + T[2])
+            if n[0] * (camx - cen[0]) + n[1] * (camy - cen[1]) + n[2] * (camz - cen[2]) <= 0.0:
+                continue
+            g["items"].append(("f", cam_depth(cen), tuple([base + i for i in f]), None, edge, n, cen))
 
     def add_poly(g, pts, color, edge, hint):
         """a flat polygon (a decal); hint is the direction it faces"""
-        base = len(g["v"])
-        g["v"].extend(pts)
-        idx = tuple(range(base, base + len(pts)))
-        n, cen = face_info(g["v"], idx)
+        n, cen = face_info(pts, tuple(range(len(pts))))
         if n[0] * hint[0] + n[1] * hint[1] + n[2] * hint[2] < 0:
             n = (-n[0], -n[1], -n[2])
-        g["items"].append(("f", cam_depth(cen), idx, color, edge, n, cen))
+        if n[0] * (camx - cen[0]) + n[1] * (camy - cen[1]) + n[2] * (camz - cen[2]) <= 0.0:
+            return
+        base = len(g["v"])
+        g["v"].extend(pts)
+        g["items"].append(("f", cam_depth(cen), tuple(range(base, base + len(pts))), color, edge, n, cen))
 
-    def add_box(g, R, c, hx, hy, hz, color_fn, edge):
+    def add_box(g, R, c, hx, hy, hz, edge, cull=True):
         wv = []
         for sx, sy, sz in BOX_CORNERS:
             q = mv(R, (sx * hx, sy * hy, sz * hz))
@@ -338,9 +395,13 @@ def draw(screen, eyesy):
         base = len(g["v"])
         g["v"].extend(wv)
         for fi, fidx in enumerate(BOX_FACES):
-            n = mv(R, BOX_NORMALS[fi])
-            cen = tuple(sum(wv[i][k] for i in fidx) * 0.25 for k in range(3))
-            g["items"].append(("f", cam_depth(cen), tuple(base + k for k in fidx), color_fn(n), edge, n, cen))
+            nl = BOX_NORMALS[fi]
+            n = mv(R, nl)
+            o = mv(R, (nl[0] * hx, nl[1] * hy, nl[2] * hz))              # the face's centre is the box centre pushed out along its normal
+            cen = (c[0] + o[0], c[1] + o[1], c[2] + o[2])
+            if cull and n[0] * (camx - cen[0]) + n[1] * (camy - cen[1]) + n[2] * (camz - cen[2]) <= 0.0:
+                continue
+            g["items"].append(("f", cam_depth(cen), (base + fidx[0], base + fidx[1], base + fidx[2], base + fidx[3]), None, edge, n, cen))
 
     # ---- skull ----
     S = SKULL["S"]
@@ -365,13 +426,14 @@ def draw(screen, eyesy):
         return hsv(h0, 0.1, 0.45 + 0.5 * max(0.0, n[0] * LIGHT[0] + n[1] * LIGHT[1] + n[2] * LIGHT[2]))
 
     def teeth(g, yc, zc):
+        g["shade"] = tooth_color
         for i in range(7):
             q = mv(Rh, ((-0.21 + i * 0.06 + 0.025) * S, yc * S, zc * S))
-            add_box(g, Rh, (q[0] + Th[0], q[1] + Th[1], q[2] + Th[2]), 0.025 * S, 0.036 * S, 0.03 * S, tooth_color, tooth_edge)
+            add_box(g, Rh, (q[0] + Th[0], q[1] + Th[1], q[2] + Th[2]), 0.025 * S, 0.036 * S, 0.03 * S, tooth_edge)
 
     g = new_group()                                               # pods
     for s in range(2):
-        add_mesh(g, SKULL["pods"][s][0], SKULL["pods"][s][1], Rh, Th, h0, kick)
+        add_mesh(g, SKULL["pods"][s], Rh, Th, h0, kick)
     g = new_group(False)                                          # pod faces
     for s in (-1, 1):
         ring = [hp(s * 0.585, 0.14 + 0.085 * math.cos(k * math.pi / 8), 0.085 * math.sin(k * math.pi / 8)) for k in range(16)]
@@ -383,11 +445,11 @@ def draw(screen, eyesy):
     add_poly(g, [hp(-0.27, -0.12, 0.10), hp(0.27, -0.12, 0.10), hp(0.27, mouth_b, 0.10), hp(-0.27, mouth_b, 0.10)],
              (8, 0, 18), hsv(hst, 0.9, 0.25 + 0.3 * J), (0, 0, 1))
     g = new_group()                                               # lower jaw
-    add_mesh(g, SKULL["jaw"][0], SKULL["jaw"][1], Rh, Th, h0, kick, dy=jaw_dy)
+    add_mesh(g, SKULL["jaw"], Rh, Th, h0, kick, dy=jaw_dy)
     g = new_group()                                               # lower teeth ride on the jaw
     teeth(g, -0.27 - J * 0.2, 0.2)
     g = new_group()                                               # cranium
-    add_mesh(g, SKULL["cran"][0], SKULL["cran"][1], Rh, Th, h0, kick)
+    add_mesh(g, SKULL["cran"], Rh, Th, h0, kick)
     g = new_group()                                               # upper teeth
     teeth(g, -0.232, 0.17)
     g = new_group(False)                                          # decals on the front: visor and the lens
@@ -422,6 +484,7 @@ def draw(screen, eyesy):
         hot = hand["flash"]
         hue = h0 + 0.03 * side
         g = new_group()
+        g["shade"] = lambda n, hue=hue, hot=hot: chrome_color(n, hue, hot)
         HS = 1.8
         sc = (1.0 + 0.18 * sq) * HS
         sy_ = 1.0 - 0.15 * sq
@@ -431,7 +494,7 @@ def draw(screen, eyesy):
             R = mm(Rb, Rl)
             cw = mv(Rb, cl)
             cw = (cw[0] * sc + T[0], cw[1] * sy_ * HS + T[1], cw[2] * sc + T[2])
-            add_box(g, R, cw, hx * sc, hy * sy_, hz * sc, lambda n: chrome_color(n, hue, hot), edge)
+            add_box(g, R, cw, hx * sc, hy * sy_, hz * sc, edge, False)      # (not culled here: the group is shifted up afterwards)
 
         hand_box(IDENT, (0, 0, 0), 0.115, 0.115, 0.06)                  # palm (no wrist: just the hand)
         fingers = [(-0.075 * side, 0.11, 0.18 * side, 1.0, 0.026), (-0.025 * side, 0.115, 0.05 * side, 1.12, 0.027),
@@ -480,15 +543,14 @@ def draw(screen, eyesy):
             live.append(sh)
     _S["shocks"] = live
 
+    waves = [(sh["x"], sh["z"], sh["age"] * 3.0, 0.34 * sh["power"] * math.exp(-sh["age"] * 2.0)) for sh in live]
     def ripple(x, z):
         y = 0.0
-        for sh in live:
-            d = math.hypot(x - sh["x"], z - sh["z"])
-            r = sh["age"] * 3.0
-            y += 0.34 * sh["power"] * math.exp(-sh["age"] * 2.0) * math.exp(-((d - r) / 0.55) ** 2)
+        for sx_, sz_, r, amp in waves:
+            y += amp * math.exp(-((math.hypot(x - sx_, z - sz_) - r) / 0.55) ** 2)
         return y
 
-    floor_x = [float(i) for i in range(-6, 7)]
+    floor_x = [float(i) for i in range(-6, 7, 1 if lq > 0.6 else 2)]
     floor_zs = [3.8 - k * 1.2 for k in range(16)]
     zlines = [[(x, ripple(x, z), z) for z in floor_zs] for x in floor_x]
     off = phase * 1.2
@@ -515,13 +577,19 @@ def draw(screen, eyesy):
         debris.append(d)
     _S["debris"] = debris
 
+    wx, wy = int(xres * 0.07), int(yres * 0.05)
+    win = pygame.Rect(wx, wy, xres - 2 * wx, int(yres * 0.77))
+    GS = 8                                                       # the neon glow is drawn at 1/8 size straight into a small picture and blown up
+    use_glow = lq > 0.5
     if _S["size"] != (xres, yres):
         _S["size"] = (xres, yres)
-        _S["layer"] = pygame.Surface((xres, yres))
+        _S["glow"] = pygame.Surface((max(2, win.w // GS), max(2, win.h // GS)))
+        _S["glow_big"] = pygame.Surface(win.size)
         rng = random.Random(3)
         _S["stars"] = [(rng.random(), rng.random() * 0.5, rng.random() * 6.28) for _ in range(60)]
-    layer = _S["layer"]
-    layer.fill((0, 0, 0))
+    glow = _S["glow"]
+    if use_glow:
+        glow.fill((0, 0, 0))
     floor_col = hsv(hst, 0.8, 0.07 + 0.06 * flash)
 
     def scaled(c, k):
@@ -535,22 +603,41 @@ def draw(screen, eyesy):
 
     bgs = screen if eyesy.auto_clear else _scratch              # screen-clear off: stage and floor go nowhere, so the old picture stays
 
+    def gpoly(col, pts, w):
+        if use_glow:
+            k = min(1.0, w / float(GS))                          # a thinner line would have been fainter once shrunk, so it is dimmed instead
+            pygame.draw.polygon(glow, (int(col[0] * k), int(col[1] * k), int(col[2] * k)),
+                                [((x - win.x) / GS, (y - win.y) / GS) for x, y in pts], 1)
+
+    def gline(col, a, b, w):
+        if use_glow:
+            k = min(1.0, w / float(GS))
+            pygame.draw.line(glow, (int(col[0] * k), int(col[1] * k), int(col[2] * k)),
+                             ((a[0] - win.x) / GS, (a[1] - win.y) / GS), ((b[0] - win.x) / GS, (b[1] - win.y) / GS), 1)
+
     def line(a, b, col, w=1):
         pygame.draw.line(bgs, col, (a[0], a[1]), (b[0], b[1]), w)
 
+    outlines = lq > 0.45
     def draw_group(g):
-        pv = [proj(p) for p in g["v"]]
+        gv = g["v"]
+        pv = [None] * len(gv)                                    # vertices are projected only when a face that uses them is drawn
+        shade = g.get("shade")
         for it in g["items"]:
             idx, col, edge, n, cen = it[2], it[3], it[4], it[5], it[6]
             if n[0] * (camx - cen[0]) + n[1] * (camy - cen[1]) + n[2] * (camz - cen[2]) <= 0.0:
                 continue
-            poly = [(pv[i][0], pv[i][1]) for i in idx]
-            pygame.draw.polygon(screen, col, poly)
-            pygame.draw.polygon(screen, edge, poly, 1)
+            poly = []
+            for i in idx:
+                p = pv[i]
+                if p is None:
+                    p = pv[i] = proj(gv[i])
+                poly.append((p[0], p[1]))
+            pygame.draw.polygon(screen, col if col is not None else shade(n), poly)
+            if outlines:
+                pygame.draw.polygon(screen, edge, poly, 1)
 
     # ---- the window: everything inside it is the "screen"; the thick black border around it is the false frame ----
-    wx, wy = int(xres * 0.07), int(yres * 0.05)
-    win = pygame.Rect(wx, wy, xres - 2 * wx, int(yres * 0.77))
     bgs.fill((7, 6, 10))
     screen.set_clip(win)
     bgs.fill((0, 0, 0), win)
@@ -568,7 +655,7 @@ def draw(screen, eyesy):
         poly = [(p[0], p[1]) for p in pts]
         pygame.draw.polygon(bgs, col, poly, 2 if dep < 14 else 1)
         if dep < 16:
-            pygame.draw.polygon(layer, scaled(stage, fade * 0.5), poly, 4)
+            gpoly(scaled(stage, fade * 0.5), poly, 4)
         if k % 2 == 0:                                           # LED strips on the walls
             for xs in (-4.6, 4.6):
                 a, b = proj((xs, 0.0, z)), proj((xs, 4.9, z))
@@ -585,12 +672,13 @@ def draw(screen, eyesy):
         prev = (c["x"], 0.01, c["z"])
         a = c["a"]
         ln = c["len"] * min(1.0, c["age"] * 12.0)
-        for i in range(1, 7):
-            a += math.sin(i * 12.9 + c["a"] * 5) * 0.5
-            nxt = (prev[0] + math.cos(a) * ln / 6, 0.01, prev[2] + math.sin(a) * ln / 6)
+        nseg = 6 if lq > 0.6 else 3
+        for i in range(1, nseg + 1):
+            a += math.sin(i * 12.9 * (6.0 / nseg) + c["a"] * 5) * 0.5 * (6.0 / nseg) ** 0.5
+            nxt = (prev[0] + math.cos(a) * ln / nseg, 0.01, prev[2] + math.sin(a) * ln / nseg)
             p0, p1 = proj(prev), proj(nxt)
             line(p0, p1, (int(255 * fade), int(235 * fade), int(250 * fade)), 2)
-            pygame.draw.line(layer, (int(160 * fade), int(120 * fade), int(180 * fade)), (p0[0], p0[1]), (p1[0], p1[1]), 5)
+            gline((int(160 * fade), int(120 * fade), int(180 * fade)), p0, p1, 5)
             prev = nxt
     for sh in live:                                              # shock rings spreading over the floor
         r = 0.15 + sh["age"] * 3.0
@@ -598,7 +686,7 @@ def draw(screen, eyesy):
         ring = [proj((sh["x"] + math.cos(k * math.pi / 14) * r, 0.02, sh["z"] + math.sin(k * math.pi / 14) * r * 0.9)) for k in range(28)]
         poly = [(p[0], p[1]) for p in ring]
         pygame.draw.polygon(bgs, scaled(accent, fade), poly, 3)
-        pygame.draw.polygon(layer, scaled(accent, fade), poly, 7)
+        gpoly(scaled(accent, fade), poly, 7)
     for h in range(2):                                           # contact shadow under each fist: the closer, the tighter and darker
         H = _S["hands"][h]["H"]
         x, _y, z = hand_pos(h, H)
@@ -607,9 +695,9 @@ def draw(screen, eyesy):
         pygame.draw.polygon(bgs, scaled(floor_col, 0.05 + 0.5 * clamp(H * 1.4)), [(p[0], p[1]) for p in pts])
     for g in skull_groups:
         draw_group(g)
-    small = pygame.transform.smoothscale(layer, (max(2, xres // 8), max(2, yres // 8)))
-    big = pygame.transform.smoothscale(small, (xres, yres))
-    bgs.blit(big, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
+    if use_glow:
+        pygame.transform.smoothscale(glow, win.size, _S["glow_big"])
+        bgs.blit(_S["glow_big"], win.topleft, special_flags=pygame.BLEND_RGB_ADD)
     if flash > 0.05:                                             # whole-window flash on a hard hit
         bgs.fill((int(40 * flash), int(40 * flash), int(46 * flash)), special_flags=pygame.BLEND_RGB_ADD)
     screen.set_clip(None)

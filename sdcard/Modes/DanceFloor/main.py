@@ -2,8 +2,10 @@
 # A glowing disco floor in perspective, and you pick how it lights up: sparkle, checkerboard flip, ripples
 # rolling out from you, sweeping stripes, or an equalizer that stands up out of the floor (it listens to the
 # audio input on the real device). Switching the light show flashes the floor so you can hit it on the beat.
-# Tap the `0` key on the beat to sync it (on the real device it also locks to the audio kick); tap it a few
-# times and the tempo follows you.
+# Tap the mapped tap button (the `0` key on desktop, the trigger on the device; it also fires on audio hits):
+# every tap stomps the floor - a shockwave ring spreads out from a new spot, the camera dips, and the beat
+# glides into step with you. Tap a few times in a row and the tempo follows you. Everything eases (tempo,
+# scroll speed, beat sync), so nothing jumps.
 #
 # Knob convention (same in every mode):
 #   knob1 = size             (how big the tiles are (zoom))
@@ -42,7 +44,7 @@ def hsv(h, s, v):
     return (int(r), int(g), int(b))
 
 _state = {"beats": 0.0, "last": None, "prev": None, "energy": 0.0, "canvas": None, "fade": None, "size": None, "aux": {},
-          "kick": 0.0, "bpm": 100.0, "tap": None}
+          "kick": 0.0, "bpm": 100.0, "tap": None, "bpm_s": None, "phase": 0.0, "taps": 0, "stomp": False}
 _au = {"gain": 1500.0, "level": 0.0, "avg": 0.0, "pulse": 0.0, "live": False, "loud_t": -99.0, "ref": 5000.0, "tabs": {}}
 
 # ---------------------------------------------------------------- audio
@@ -115,13 +117,26 @@ def beat_clock(eyesy, bpm=None):
         bpm = 30 + eyesy.knob2 * 90
     elif bpm == "tap":
         bpm = _state["bpm"]
-    _state["beats"] += dt * bpm / 60.0
+    if _state["bpm_s"] is None:
+        _state["bpm_s"] = bpm
+    _state["bpm_s"] += (bpm - _state["bpm_s"]) * (1.0 - math.exp(-dt * 4.0))      # tempo glides instead of jumping
+    _state["beats"] += dt * _state["bpm_s"] / 60.0
+    _state["stomp"] = False
     if getattr(eyesy, "trig", False):
         tp = _state["tap"]
         if tp is not None and 0.25 < now - tp < 2.0:
             _state["bpm"] = clamp(lerp(_state["bpm"], 60.0 / (now - tp), 0.5), 40.0, 180.0)
         _state["tap"] = now
-        _state["beats"] = math.floor(_state["beats"]) + 1.0
+        _state["taps"] += 1
+        _state["stomp"] = True
+        b = _state["beats"]
+        _state["phase"] += round(b) - b                        # owe the clock a correction to the nearest beat, paid back smoothly
+    if _state["phase"]:
+        step = _state["phase"] * (1.0 - math.exp(-dt * 7.0))
+        _state["beats"] += step
+        _state["phase"] -= step
+        if abs(_state["phase"]) < 1e-4:
+            _state["phase"] = 0.0
     ks = (eyesy.knob1, eyesy.knob2, eyesy.knob3, eyesy.knob4, eyesy.knob5)
     prev = _state["prev"]
     move = 0.0 if prev is None else sum(abs(a - b) for a, b in zip(ks, prev))
@@ -129,8 +144,12 @@ def beat_clock(eyesy, bpm=None):
     _state["energy"] = max(_state["energy"] * math.exp(-dt * 2.5), min(1.0, move * 30.0))
     beats = _state["beats"]
     frac = beats % 1.0
-    kick = max((1.0 - frac) ** 3, _au["pulse"], _state["energy"] * 0.9)
-    _state["kick"] = kick
+    target = max((1.0 - frac) ** 3, _au["pulse"], _state["energy"] * 0.9)
+    if _state["stomp"]:
+        target = 1.0
+    k = _state["kick"]
+    k += (target - k) * (1.0 - math.exp(-dt * (12.0 if target > k else 3.5)))      # quick but not instant attack, soft release
+    kick = _state["kick"] = k
     return dt, beats, frac, kick, _state["energy"]
 
 def colors(eyesy):
@@ -201,6 +220,18 @@ def _draw(screen, eyesy):
         A["flash"] = 1.0
     A["flash"] = max(0.0, A.get("flash", 0.0) - dt * 2.5)
     flash = A["flash"]
+    A["boost"] = max(0.0, A.get("boost", 0.0) - dt * 1.0)
+    A["cam"] = A.get("cam", 0.0) + (kick - A.get("cam", 0.0)) * (1.0 - math.exp(-dt * 3.0))   # the camera drifts, never bounces
+    waves = A.setdefault("waves", [])
+    if _state["stomp"]:                                        # a tap launches a shockwave from a fresh spot on the floor
+        n = _state["taps"]
+        ox = ((n * 0.6180339) % 1.0 - 0.5) * (5 + int(eyesy.knob3 * 9.99))
+        waves.append([0.0, ox, 0.5 + (n % 3) * 1.5, (n * 0.137) % 0.4])
+        del waves[:-4]
+        A["boost"] = 1.0
+    for w in waves:
+        w[0] += dt
+    waves[:] = [w for w in waves if w[0] < 1.6]
     if eyesy.auto_clear:
         screen.fill(bg)
     cx, horizon = xres / 2.0, yres * 0.36
@@ -208,10 +239,11 @@ def _draw(screen, eyesy):
         pygame.draw.rect(screen, hsv(h0 + i * 0.05, 0.8, (0.30 - i * 0.04) + 0.25 * kick + 0.3 * flash), (0, int(horizon - (i + 1) * yres * 0.035), xres, int(yres * 0.03)))
     cols = 5 + int(eyesy.knob3 * 9.99)
     f = yres * (0.55 + eyesy.knob1 * 0.95)
-    cam_h = 1.7 - 0.30 * kick                                  # the camera dips on every hit
+    cam_h = 1.7 - 0.06 * A.setdefault('cam', 0.0)                                  # the camera dips on every hit
     ncol = cols + 2
-    scroll = 0.0 if show == 4 else (beats * 0.5) % 1.0         # the floor rolls toward you (except the equalizer, which stands still)
-    base_row = 0 if show == 4 else int(math.floor(beats * 0.5))
+    A["travel"] = A.get("travel", 0.0) + dt * _state["bpm_s"] / 60.0 * 0.5 * (1.0 + 0.4 * A.get("boost", 0.0))   # the floor rolls toward you; a tap makes it surge
+    scroll = 0.0 if show == 4 else A["travel"] % 1.0           # (the equalizer stands still)
+    base_row = 0 if show == 4 else int(math.floor(A["travel"]))
     bi = int(math.floor(beats))
     spec = spectrum(eyesy, ncol) if show == 4 else None
     nrows = int(6 + 12 * _lod["q"])
@@ -250,6 +282,12 @@ def _draw(screen, eyesy):
                 if row < v * 14.0:
                     lit = 0.5 + 0.5 * row / 14.0
                     hue = h0 + c / float(ncol) * 0.5
+            for age, wx, wy, wh in waves:                      # tap shockwaves: a bright ring that widens and fades
+                d = math.hypot(x0 + 0.5 - wx, (row + 0.6) - wy)
+                r = clamp(1.0 - abs(d - age * 9.0) / 1.5) * (1.0 - age / 1.6) ** 1.5
+                if r > 0.02:
+                    lit = min(1.0, lit + r)
+                    hue = h0 + wh + r * 0.1 if r > lit - r else hue
             if lit > 0.02:
                 col = hsv(hue, 0.85, min(1.0, lit * fog + 0.05))
             else:

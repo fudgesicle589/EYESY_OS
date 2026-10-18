@@ -35,6 +35,13 @@ import pygame
 TAU = math.pi * 2.0
 sin, cos = math.sin, math.cos
 
+def _circle(surf, col, c, r, w=0):
+    """pygame.draw.circle that takes floats (the Pi's older pygame only accepts whole numbers here and raises a TypeError otherwise)"""
+    r = int(r)
+    if r < 1:
+        return
+    pygame.draw.circle(surf, col, (int(c[0]), int(c[1])), r, min(int(w), r) if w else 0)
+
 def clamp(v, lo=0.0, hi=1.0): return max(lo, min(hi, v))
 
 def hsv(h, s, v):
@@ -175,8 +182,8 @@ def _beads(screen, cx, cy, Rmax, ph, t, hue, detail, q):
             ang = a * TAU / arms + s * (2.4 + detail * 1.5) * TAU + t * 0.35
             x, y = cx + r * cos(ang), cy + r * sin(ang)
             rad = 1.5 + s * s * Rmax * 0.025
-            pygame.draw.circle(screen, hsv(hue + a / arms + s * 0.5, 0.9, 0.35 + 0.4 * s), (x, y), rad * 1.9)
-            pygame.draw.circle(screen, hsv(hue + a / arms + s * 0.5, 0.35, 1.0), (x, y), rad)
+            _circle(screen, hsv(hue + a / arms + s * 0.5, 0.9, 0.35 + 0.4 * s), (x, y), rad * 1.9)
+            _circle(screen, hsv(hue + a / arms + s * 0.5, 0.35, 1.0), (x, y), rad)
 
 def _eye(screen, x, y, w, hue, look, opn, dil):
     """one almond-shaped eye: pale lens, colored iris, black pupil"""
@@ -190,10 +197,10 @@ def _eye(screen, x, y, w, hue, look, opn, dil):
     pygame.draw.polygon(screen, hsv(hue + 0.5, 0.12, 1.0), lens)
     ir = h * 0.8
     ix = x + look * w * 0.18
-    pygame.draw.circle(screen, hsv(hue, 0.9, 1.0), (ix, y), ir)
-    pygame.draw.circle(screen, hsv(hue + 0.15, 0.9, 0.7), (ix, y), ir * 0.7, max(1, int(ir * 0.12)))
-    pygame.draw.circle(screen, (0, 0, 0), (ix, y), ir * (0.25 + 0.4 * dil))
-    pygame.draw.circle(screen, (255, 255, 255), (ix - ir * 0.3, y - ir * 0.3), max(1, ir * 0.14))
+    _circle(screen, hsv(hue, 0.9, 1.0), (ix, y), ir)
+    _circle(screen, hsv(hue + 0.15, 0.9, 0.7), (ix, y), ir * 0.7, max(1, int(ir * 0.12)))
+    _circle(screen, (0, 0, 0), (ix, y), ir * (0.25 + 0.4 * dil))
+    _circle(screen, (255, 255, 255), (ix - ir * 0.3, y - ir * 0.3), max(1, ir * 0.14))
     pygame.draw.polygon(screen, (10, 0, 20), lens, max(2, int(w * 0.05)))
 
 def _wandering_eyes(screen, cx, cy, Rmax, ph, t, hue, detail, lvl, env3, bike):
@@ -227,9 +234,9 @@ def _mandala(screen, cx, cy, R, t, N, hue, dil, detail):
             pts.append((cx + rk * cos(a), cy + rk * sin(a)))
         col = hsv(hue + L * 0.17 + t * 0.05, 0.9, 1.0) if L % 2 == 0 else hsv(hue + 0.5 + L * 0.1, 0.8, 0.22)
         pygame.draw.polygon(screen, col, pts)
-    pygame.draw.circle(screen, (0, 0, 0), (cx, cy), R * (0.12 + 0.15 * dil))
-    pygame.draw.circle(screen, hsv(hue + 0.5, 0.3, 1.0), (cx, cy), R * (0.12 + 0.15 * dil), max(1, int(R * 0.03)))
-    pygame.draw.circle(screen, (255, 255, 255), (cx - R * 0.07, cy - R * 0.07), max(1, int(R * 0.035)))
+    _circle(screen, (0, 0, 0), (cx, cy), R * (0.12 + 0.15 * dil))
+    _circle(screen, hsv(hue + 0.5, 0.3, 1.0), (cx, cy), R * (0.12 + 0.15 * dil), max(1, int(R * 0.03)))
+    _circle(screen, (255, 255, 255), (cx - R * 0.07, cy - R * 0.07), max(1, int(R * 0.035)))
 
 # ------------------------------------------------------------------------------------------ the road and the rider
 def _road_y(x, dist, gy, A1, A2, bump):
@@ -312,12 +319,12 @@ def _paint(screen, prims, U, col, e):
             pygame.draw.line(screen, col, p[1], p[2], w)
             if w > 3:
                 r = w * 0.5
-                pygame.draw.circle(screen, col, p[1], r)
-                pygame.draw.circle(screen, col, p[2], r)
+                _circle(screen, col, p[1], r)
+                _circle(screen, col, p[2], r)
         elif p[0] == 'c':
-            pygame.draw.circle(screen, col, p[1], p[2] * U + e)
+            _circle(screen, col, p[1], p[2] * U + e)
         else:
-            pygame.draw.circle(screen, col, p[1], p[2] * U + e, max(1, int(p[3] * U + 2 * e)))
+            _circle(screen, col, p[1], p[2] * U + e, max(1, int(p[3] * U + 2 * e)))
 
 def _ghost(screen, prims, U, col):
     """a thin colored outline of the rider: one of the lagging trails"""
@@ -325,9 +332,9 @@ def _ghost(screen, prims, U, col):
         if p[0] == 'l':
             pygame.draw.line(screen, col, p[1], p[2], max(2, int(p[3] * U * 0.18)))
         elif p[0] == 'c':
-            pygame.draw.circle(screen, col, p[1], p[2] * U, 2)
+            _circle(screen, col, p[1], p[2] * U, 2)
         else:
-            pygame.draw.circle(screen, col, p[1], p[2] * U, 3)
+            _circle(screen, col, p[1], p[2] * U, 3)
 
 # ------------------------------------------------------------------------------------------ the main loop
 def _draw(screen, eyesy):
@@ -432,12 +439,12 @@ def _draw(screen, eyesy):
     nsp = 12 + int(10 * q)
     for hub in (make_tf(ox, oy)(0.0, 0.0), make_tf(ox, oy)(3.0, 0.0)):
         _spokes(screen, hub, U * 0.93, wheel, nsp, (6, 0, 14), 2)
-        pygame.draw.circle(screen, hsv(hue + 0.5, 0.4, 1.0), hub, U * 0.1)
+        _circle(screen, hsv(hue + 0.5, 0.4, 1.0), hub, U * 0.1)
     tfm = make_tf(ox, oy)
     ex, ey = tfm(2.25, 3.7)                                                                    # the rider's eye: a tiny spiral
-    pygame.draw.circle(screen, (255, 255, 255), (ex, ey), U * 0.13)
-    pygame.draw.circle(screen, hsv(hue, 1.0, 1.0), (ex, ey), U * 0.09)
-    pygame.draw.circle(screen, (0, 0, 0), (ex, ey), U * (0.03 + 0.05 * clamp(lvl + env[2])))
+    _circle(screen, (255, 255, 255), (ex, ey), U * 0.13)
+    _circle(screen, hsv(hue, 1.0, 1.0), (ex, ey), U * 0.09)
+    _circle(screen, (0, 0, 0), (ex, ey), U * (0.03 + 0.05 * clamp(lvl + env[2])))
 
     # ---- 5. everything melts: rows of the picture slide sideways in waves ----
     amp = (3.0 + 20.0 * detail + 30.0 * env[2] + 20.0 * lvl) * yres / 720.0

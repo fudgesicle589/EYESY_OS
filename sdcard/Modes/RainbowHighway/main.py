@@ -53,8 +53,8 @@ def setup(screen, eyesy):
 
 # ---- adaptive quality (Raspberry Pi): the picture is drawn small and scaled up, and it quietly gets smaller / simpler if frames run long ----
 _lod = {"q": 1.0, "avg": 0.0, "t0": 0.0, "tier": 1, "slow": 0, "calm": 0}
-SCALES = (1.0, 0.5, 0.34)                                      # how big the working picture is, as a fraction of the screen
-LOD_BUDGET = 0.026                                             # seconds of drawing per frame to stay under (the Eyesy runs at about 30 fps)
+SCALES = (1.0, 0.5, 0.34, 0.25)                                     # how big the working picture is, as a fraction of the screen
+LOD_BUDGET = 0.022                                             # seconds of drawing per frame to stay under (the Eyesy runs at about 30 fps)
 
 def lod_start():
     _lod["t0"] = time.perf_counter()
@@ -70,7 +70,7 @@ def lod_end():
         _lod["q"] = min(1.0, _lod["q"] + 0.01)
         _lod["slow"] = 0
     _lod["calm"] = _lod["calm"] + 1 if avg < LOD_BUDGET * 0.2 else 0
-    if _lod["slow"] > 30 and _lod["q"] <= 0.5 and _lod["tier"] < len(SCALES) - 1:
+    if _lod["slow"] > 10 and _lod["q"] <= 0.5 and _lod["tier"] < len(SCALES) - 1:
         _lod["tier"] += 1                                      # still too slow with the least detail: draw smaller
         _lod["slow"] = _lod["calm"] = 0
         _lod["avg"] = 0.0
@@ -139,8 +139,8 @@ def _draw(screen, eyesy):
 
     # ---- camera ----
     q = _lod["q"]
-    nmod = 8 + int(7 * q)                                 # fewer bays ahead of you when the machine is struggling
-    seg_arch = 12 if (q > 0.7 and rs > 0.4) else 6
+    nmod = 6 + int(6 * q)                                 # fewer bays ahead of you when the machine is struggling
+    seg_arch = 12 if (q > 0.85 and rs > 0.7) else 6
     f = yres * zoom
     ox, oy = xres / 2.0, yres * HORIZON
     kappa = steer * 0.010                                 # how much the tunnel bends
@@ -176,7 +176,7 @@ def _draw(screen, eyesy):
     fill_poly = pygame.draw.polygon
 
     # ---- sky (a few dozen bands rather than a line per pixel), chasm, rainbow, sunburst ----
-    bands = 48 if q > 0.6 else 24
+    bands = 24 if q > 0.6 else 12
     band_h = oy / bands
     for i in range(bands):
         t = ((i + 0.5) / bands) ** 1.5
@@ -196,9 +196,9 @@ def _draw(screen, eyesy):
     bow_mid = lerp3(sky_top, haze, 0.5)
     bow_c = (int(ox), int(oy))
     ring_w = max(1, int(band_w + 1.5))
-    for i, hh in enumerate((0.0, 0.08, 0.16, 0.36, 0.55, 0.75)):      # six full rings round the horizon (a ring is its own rotation)
+    for i, hh in enumerate((0.0, 0.16, 0.55) if _lod["tier"] > 1 else (0.0, 0.08, 0.16, 0.36, 0.55, 0.75)):      # six full rings round the horizon (a ring is its own rotation)
         col = lerp3(bow_mid, hsv(hh, 0.55, 1.0), 0.85 + 0.15 * sin(elapsed * 1.3 + i))
-        pygame.draw.circle(screen, ic(col), bow_c, max(2, int(r_top - i * band_w)), ring_w)
+        pygame.draw.circle(screen, ic(col), bow_c, max(2, int(r_top - i * band_w * (2 if _lod["tier"] > 1 else 1))), ring_w * (2 if _lod["tier"] > 1 else 1))
     n = 18
     spin = elapsed * 0.25
     burst = []
@@ -232,7 +232,7 @@ def _draw(screen, eyesy):
         oa = clamp((zm - 7.0) / 30.0) * 0.8
         outline_c = (int(OUTLINE[0] + (haze[0] - OUTLINE[0]) * oa), int(OUTLINE[1] + (haze[1] - OUTLINE[1]) * oa), int(OUTLINE[2] + (haze[2] - OUTLINE[2]) * oa))
         line_w = max(1, int(round((2 if zm < 14 else 1) * rs)))
-        outlines = zm < (26 if rs > 0.7 else 18)          # the far bays are too small for an outline to matter
+        outlines = zm < (18 if rs > 0.7 else 10)          # the far bays are too small for an outline to matter
 
         def poly(pts3, color):
             pts, seen = project(pts3)
@@ -259,16 +259,16 @@ def _draw(screen, eyesy):
             # outer terrace: tall wall with two round windows
             poly([(s_ * XB, yT1, z0c), (s_ * XB, yT2, z0c), (s_ * XB, yT2, z1), (s_ * XB, yT1, z1)], dim(wall, 0.85))
             ym = (yT1 + yT2) / 2
-            wseg = 12 if q > 0.7 else 8
+            wseg = 8
             wtab = _CIRC[wseg]
             for zc in (z0 + PERIOD * 0.28, z0 + PERIOD * 0.72):
-                if zc > NEAR:
+                if NEAR < zc < 40:
                     poly([(s_ * XB, ym + 0.42 * sn_, zc + 0.42 * cs_) for sn_, cs_ in wtab], col["hole"])
             xc, yT3 = XB + 2.6, yT2 + 2.2 + 1.2 * h1
             poly([(s_ * xc, yT2, z0c), (s_ * xc, yT3, z0c), (s_ * xc, yT3, z1), (s_ * xc, yT2, z1)], dim(col["far"], 0.9))
             yc3 = (yT2 + yT3) / 2
-            if zm > NEAR:
-                w3 = 16 if q > 0.7 else 10
+            if NEAR < zm < 40:
+                w3 = 10 if q > 0.7 else 8
                 poly([(s_ * xc, yc3 + 0.9 * sn_, zm + 0.9 * cs_) for sn_, cs_ in _CIRC[w3]], col["hole"])
             if yT2 < cam_h - 0.1:                         # its flat top, when we can see it
                 poly([(s_ * XB, yT2, z0c), (s_ * (XB + 2.4), yT2, z0c), (s_ * (XB + 2.4), yT2, z1), (s_ * XB, yT2, z1)], col["top"])
@@ -306,7 +306,7 @@ def _draw(screen, eyesy):
         # overhead ring every few bays
         if gi % 7 == 0 and z0 > NEAR:
             R_out, R_in, cy = 4.5, 3.9, 1.7
-            rtab = _RING[26 if q > 0.6 else 14]
+            rtab = _RING[14]
             outer = [(R_out * cs_, cy + R_out * sn_, z0) for sn_, cs_ in rtab]
             inner = [(R_in * cs_, cy + R_in * sn_, z0) for sn_, cs_ in rtab[::-1]]
             poly(outer + inner, col["portal"])
