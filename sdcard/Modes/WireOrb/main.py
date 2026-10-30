@@ -292,7 +292,6 @@ def _draw(screen, eyesy):
                 run.append(pts[s + 1])
             if len(run) > 1:
                 lines(canvas, _ring_color(h0, hue, cls_run), False, run, 2 if cls_run >= 2 else 1)
-    pygame.draw.circle(canvas, hsv(h0 + 0.5, 0.4, 1.0), (int(cx), int(cy)), max(2, int((6 + 10 * kick) * rs)))
     if rs == 1.0:
         screen.blit(canvas, (0, 0))
     else:

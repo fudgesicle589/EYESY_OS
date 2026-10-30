@@ -6,10 +6,10 @@
 #
 # Knob convention (same in every mode):
 #   knob1 = size             (pulse spacing: how far each ring travels before the next beat's ring is fired)
-#   knob2 = main motion      (tempo, 30 to 120 BPM)
+#   knob2 = wave center, up/down (tempo now follows audio or taps of the `0` key)
 #   knob3 = extra detail     (hex size: a few huge hexes up to a fine honeycomb)
 #   knob4 = foreground color (hue of the honeycomb)
-#   knob5 = bonus control    (spiral arms: 0 = plain rings, then 1 to 6 spiral arms, stepped)
+#   knob5 = wave center, left/right
 import colorsys
 import math
 import random
@@ -187,16 +187,23 @@ def draw(screen, eyesy):
 
 def _draw(screen, eyesy):
     xres, yres = eyesy.xres, eyesy.yres
-    dt, beats, frac, kick, energy = beat_clock(eyesy)
+    dt, beats, frac, kick, energy = beat_clock(eyesy, "tap")
     h0, bg = colors(eyesy)
     screen.fill(bg)
     r = yres / (5.0 + eyesy.knob3 * 20.0 * (0.55 + 0.45 * _lod["q"]))      # larger (fewer) hexes when the machine is struggling
     w, h = r * math.sqrt(3), r * 1.5
     cols, rows = int(xres / w) + 2, int(yres / h) + 2
     wl = (0.10 + eyesy.knob1 * 0.6) * xres                     # how far a pulse travels in one beat
-    arms = int(eyesy.knob5 * 6.99)                             # 0 = plain rings, up to 6 spiral arms
-    cx0 = xres / 2 + 0.12 * xres * math.sin(beats * 0.12)      # the source drifts gently
-    cy0 = yres / 2 + 0.12 * yres * math.sin(beats * 0.09 + 1.0)
+    arms = 0
+    tx, ty = eyesy.knob5 * xres, eyesy.knob2 * yres            # knob5 slides the source left/right, knob2 up/down
+    cx0, cy0, best = tx, ty, None
+    for row in range(rows):                                    # snap the source to the nearest hexagon's center
+        for col in range(cols):
+            x = col * w + (row % 2) * w / 2 - w / 2
+            y = row * h
+            dd = (x - tx) ** 2 + (y - ty) ** 2
+            if best is None or dd < best:
+                best, cx0, cy0 = dd, x, y
     tau = 2 * math.pi
     atan2, hypot, sin, cos, pi = math.atan2, math.hypot, math.sin, math.cos, math.pi
     poly = pygame.draw.polygon
@@ -213,4 +220,7 @@ def _draw(screen, eyesy):
             sc = clamp(0.22 + 0.80 * val + 0.10 * kick, 0.1, 1.05)
             pts = [(x + r * sc * ux, y + r * sc * uy) for ux, uy in corner]
             poly(screen, hsv(h0 + wf * 0.30 + d / xres * 0.12, 0.85 - 0.45 * val * val, 0.18 + 0.82 * val), pts)
-    pygame.draw.circle(screen, hsv(h0 + 0.5, 0.3, 1.0), (int(cx0), int(cy0)), int(6 + 14 * kick))        # the source
+    sc = 1.0 + 0.1 * kick                                      # the source hexagon, highlighted
+    pts = [(cx0 + r * sc * ux, cy0 + r * sc * uy) for ux, uy in corner]
+    poly(screen, hsv(h0 + 0.5, 0.3, 1.0), pts)
+    pygame.draw.polygon(screen, hsv(h0, 0.9, 1.0), pts, 3)

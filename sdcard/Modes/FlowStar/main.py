@@ -40,7 +40,7 @@ def hsv(h, s, v):
     return (int(r), int(g), int(b))
 
 _state = {"last": None, "theta": 0.0, "omega": 0.0, "hand": 0.0, "tilt": 0.0, "phase": 0.0, "hue": 0.0, "move": 0.0,
-          "look": 0.0, "canvas": None, "size": None, "face": None}
+          "look": 0.0, "canvas": None, "size": None, "face": None, "ghost": None}
 _play = {"prev": None, "vel": [0.0] * 5, "env": [0.0] * 5, "mom": [0.0] * 5}
 
 def knob_play(eyesy, dt):
@@ -69,8 +69,10 @@ def sqr(b, h):
     """distance from a square's middle to its edge in direction b (the square's own frame)"""
     return h / max(abs(math.cos(b)), abs(math.sin(b)), 1e-6)
 
+SQRT2 = math.sqrt(2.0)
+
 def corners(h, rot):
-    return [pt(h * math.sqrt(2.0), math.pi / 4 + k * math.pi / 2, rot) for k in range(4)]
+    return [pt(h * SQRT2, math.pi / 4 + k * math.pi / 2, rot) for k in range(4)]
 
 # one print, many looks. Each keyframe is:
 # (ring contrast, ray contrast, ring count, round->square, ring spacing, spiral twist, color spread, planets, sun)
@@ -129,15 +131,23 @@ def pattern(face, rot, h2, hue, P, f, n0, twist, glow, level, orbit, wshift):
     else:
         bands.reverse()                                       # inner to outer
         ang = [i * 2 * math.pi / W for i in range(W + 1)]
-        prev = None
+        edges = {}                                            # a band's outer edge is the next band's inner edge
+        def edge(u):
+            if u not in edges:
+                edges[u] = [at(u, b) for b in ang]
+            return edges[u]
         for lo, hi, rp in bands:
-            inner = [at(lo, b) for b in ang]
-            outer = [at(hi, b) for b in ang]
+            inner = edge(lo)
+            outer = edge(hi)
             col = bright(((lo + hi) / 2) ** e)
+            cols = []                                         # only two wedge shades exist per band
+            for w in (0, 1):
+                v = abs(rm * rp - wm * w)
+                cols.append(lerpc(col, v) if v > 0.02 else None)
             for i in range(W):
-                v = abs(rm * rp - wm * ((i + wshift) % 2))
-                if v > 0.02:
-                    pygame.draw.polygon(face, lerpc(col, v), [inner[i], outer[i], outer[i + 1], inner[i + 1]])
+                c = cols[(i + wshift) % 2]
+                if c is not None:
+                    pygame.draw.polygon(face, c, [inner[i], outer[i], outer[i + 1], inner[i + 1]])
     # planets and a sun grow in as the print turns cosmic
     cen = pt(0, 0, rot)
     if sun > 0.03:
@@ -164,6 +174,7 @@ def square(face, rot, hue, P, f, n0, twist, orbit, glow, level, shift):
 
 def setup(screen, eyesy):
     _state["canvas"] = None
+    _state["ghost"] = None
     _state["face"] = pygame.Surface((L, L), pygame.SRCALPHA)
 
 def draw(screen, eyesy):
@@ -213,8 +224,10 @@ def draw(screen, eyesy):
 
     face = _state["face"]
     face.fill((0, 0, 0, 0))
-    square(face, 0.0, hue + 0.08, P, f, n0 + 1, twist, orbit, glow, level, n0)          # underneath
-    square(face, math.pi / 4, hue, P, f, n0, twist, -orbit, glow, level, n0 + 1)         # on top
+    # the wedge checker shift stays constant: the ring parity already relabels itself each time the rings
+    # wrap, so shifting the wedges too would flip the whole checker and make the middle jump back
+    square(face, 0.0, hue + 0.08, P, f, n0 + 1, twist, orbit, glow, level, 0)          # underneath
+    square(face, math.pi / 4, hue, P, f, n0, twist, -orbit, glow, level, 1)               # on top
     for k in range(4):                                                                       # the quilted seams
         a = k * math.pi / 4
         pygame.draw.line(face, (0, 0, 0), pt(H * 0.8, a, 0), pt(-H * 0.8, a, 0), 1)
@@ -233,7 +246,9 @@ def draw(screen, eyesy):
     py = yres / 2.0 + loop * math.sin(a) + petal * math.sin(a * 3)
 
     canvas = _state["canvas"]
-    ghost = pygame.Surface((xres, yres))
+    ghost = _state["ghost"]
+    if ghost is None or ghost.get_size() != (xres, yres):
+        ghost = _state["ghost"] = pygame.Surface((xres, yres))
     ghost.fill(bg)
     ghost.set_alpha(200)                                        # a short smear of the star behind it
     canvas.blit(ghost, (0, 0))

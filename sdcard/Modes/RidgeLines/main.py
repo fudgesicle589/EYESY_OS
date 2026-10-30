@@ -219,22 +219,27 @@ def _draw(screen, eyesy):
     s47, c47, s83, c83 = T["s47"], T["c47"], T["s83"], T["c83"]
     sp = spectrum(eyesy, NB)
     live = _state["aux"].setdefault("live", [0.0] * NB)
-    for i in range(NB):                                         # the front line follows the sound, rising fast and falling smoothly
-        live[i] = max(sp[i], live[i] - dt * 2.5)
+    k_up, k_dn = min(1.0, dt * 12.0), min(1.0, dt * 3.0)        # ease toward the sound: quick rise, slow fall, no snapping
+    for i in range(NB):
+        live[i] += (sp[i] - live[i]) * (k_up if sp[i] > live[i] else k_dn)
+    sm = [(live[max(i - 1, 0)] + 2.0 * live[i] + live[min(i + 1, NB - 1)]) * 0.25 for i in range(NB)]   # soften neighbouring bands
     hist = _state["aux"].setdefault("hist", [])
     acc = _state["aux"].get("acc", 0.0) + dt * (30 + eyesy.knob2 * 90) / 60.0 * 3.0        # about 3 lines pushed back per beat
     if acc >= 1.0:
-        acc = 0.0
-        hist.insert(0, list(live))
+        acc -= 1.0
+        hist.insert(0, list(sm))
         del hist[48:]
     _state["aux"]["acc"] = acc
-    rows = [live] + hist                                        # newest first
+    f = ease(acc)                                               # history glides back continuously instead of stepping
+    rows = [(sm, 0.0)] + [(h, k + f) for k, h in enumerate(hist)]
     fill, lines = pygame.draw.polygon, pygame.draw.lines
     sin, cos = math.sin, math.cos
-    for i in range(L - 1, -1, -1):                              # oldest (top, far) to newest (bottom, near)
-        row = rows[i] if i < len(rows) else rows[-1]
-        base = yres * (0.22 + 0.74 * (L - 1 - i) / max(L - 1, 1))
-        ph2, ph3 = i * 1.7 + beats * 2.0, -(i * 0.9 + beats * 1.3)
+    span = float(max(L - 1, 1))
+    for row, slot in reversed(rows):                            # oldest (top, far) to newest (bottom, near)
+        if slot > L - 1:
+            continue
+        base = yres * (0.22 + 0.74 * (1.0 - slot / span))
+        ph2, ph3 = slot * 1.7 + beats * 1.0, -(slot * 0.9 + beats * 0.65)
         c2, s2, c3, s3 = cos(ph2), sin(ph2), cos(ph3), sin(ph3)
         pts = []
         add = pts.append
@@ -244,5 +249,5 @@ def _draw(screen, eyesy):
             jag = rough * ((s47[p] * c2 + c47[p] * s2) + (s83[p] * c3 + c83[p] * s3)) * (0.3 + v)
             add((xs[p], base - A * edge[p] * (v * 1.6 + jag)))
         fill(screen, bg, [(x_l, base + 3)] + pts + [(x_r, base + 3)])       # hides the lines behind this one
-        age = 1.0 - i / float(max(L - 1, 1))
-        lines(screen, hsv(h0 + age * 0.5, 0.75 - 0.2 * (1.0 - age), 0.40 + 0.60 * age), False, pts, 2)
+        age = 1.0 - slot / span
+        lines(screen, hsv(h0 + age * 0.5, 0.75 - 0.2 * (1.0 - age), (0.40 + 0.60 * age) * min(1.0, (L - 1 - slot) * 0.5 + 0.2)), False, pts, 2)

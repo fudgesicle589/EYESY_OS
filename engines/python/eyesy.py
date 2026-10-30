@@ -254,7 +254,7 @@ class Eyesy:
         config_file = self.SYSTEM_PATH + "config.json"
         if not(os.path.isdir(self.SYSTEM_PATH)) :
             print('No system folder, creating...')
-            os.system('mkdir ' + self.SYSTEM_PATH)
+            os.makedirs(self.SYSTEM_PATH, exist_ok=True)
 
         try:
             # Load configuration, raising errors for file or JSON issues
@@ -509,7 +509,7 @@ class Eyesy:
     def load_grabs(self):
         if not(os.path.isdir(self.GRABS_PATH)) :
             print('No grab folder, creating...')
-            os.system('mkdir ' + self.GRABS_PATH)
+            os.makedirs(self.GRABS_PATH, exist_ok=True)
         print('loading recent grabs...')
         self.lastgrab = None
         self.lastgrab_thumb = None

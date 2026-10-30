@@ -1,6 +1,6 @@
 # OGBicycleDay: April 19, 1943. Albert Hofmann, 3 days after his first accidental dose of LSD, takes a deliberate one in
 # his lab in Basel, and as it comes on he cycles home through a world that is breathing, melting and turning to
-# kaleidoscopes. This is that ride, built from the way people describe the visuals (Hofmann's own notes, the Klüver
+# kaleidoscopes. This is that ride, built from the way people describe the visuals (Hofmann's own notes, the Kluver
 # "form constants" that every account keeps coming back to, and a lot of trip reports):
 #   * a hyperspace TUNNEL that you fly down, made of mirrored kaleidoscope segments, spirals and lattices in
 #     iridescent colors that slide through the whole rainbow (and that "breathe" in and out)
@@ -79,7 +79,7 @@ def draw(screen, eyesy):
     dt = time.perf_counter() - _lod["t0"]
     _lod["avg"] = _lod["avg"] * 0.9 + dt * 0.1 if _lod["avg"] else dt
     if _lod["avg"] > LOD_BUDGET:
-        _lod["q"] = max(0.25, _lod["q"] - 0.04)
+        _lod["q"] = max(0.0, _lod["q"] - 0.08)
     elif _lod["avg"] < LOD_BUDGET * 0.6:
         _lod["q"] = min(1.0, _lod["q"] + 0.01)
 
@@ -120,7 +120,7 @@ def _lut(h0, bands, bgc):
     return _cache["lut"]
 
 def _tunnel(screen, xres, yres, t, fly, spin, N, detail, zoom, roll, h0, bgc, q):
-    W = int(52 + 52 * q)
+    W = 24 + 8 * int(q * 10.0 + 0.5)                               # stepped, so the cached grid is not rebuilt every time q wiggles
     H = max(2, int(W * yres / xres))
     an, dp = _grid(W, H)
     lut = _lut(h0, 3 + int(detail * 4.99), bgc)
@@ -145,8 +145,8 @@ def _angles(n):
 
 def _rings(screen, cx, cy, Rmax, ph, t, N, hue, detail, q):
     """flower-shaped rings that grow out of the vanishing point toward you, each one twisted a bit more"""
-    NR = 9 + int(9 * q)
-    n = 36 + int(36 * q)
+    NR = 5 + int(13 * q)
+    n = 24 + int(48 * q)
     cs = _angles(n)
     Rmin = Rmax * 0.025
     order = sorted(range(NR), key=lambda i: (i / NR + ph) % 1.0)
@@ -166,7 +166,7 @@ def _rings(screen, cx, cy, Rmax, ph, t, N, hue, detail, q):
 def _beads(screen, cx, cy, Rmax, ph, t, hue, detail, q):
     """spiral arms of glowing beads swirling out of the center"""
     arms = 5 + int(detail * 3)
-    per = 14 + int(12 * q)
+    per = 8 + int(18 * q)
     Rmin = Rmax * 0.03
     for a in range(arms):
         for m in range(per):
@@ -237,7 +237,7 @@ def _road_y(x, dist, gy, A1, A2, bump):
 
 def _ribbon(screen, xres, yres, dist, gy, A1, A2, bump, th, hue, t, q):
     """the rainbow road: three stacked ribbons of sliding colored stripes, each one a beat behind the one above it"""
-    step = max(14, int(xres / (30 + 14 * q)))
+    step = max(14, int(xres / (18 + 26 * q)))
     xs = list(range(-step, xres + 2 * step, step))
     for layer in (2, 1, 0):
         off = layer * th * 1.15
@@ -423,12 +423,12 @@ def _draw(screen, eyesy):
         _ghost(screen, gp, U, hsv(hue + k * 0.18 + t * 0.1, 1.0, 1.0))
 
     pr = _rider(make_tf(ox, oy), crank, wheel, t, lvl)
-    auras = 3 + int(2 * q)
+    auras = 2 + int(3 * q)
     for k in range(auras, 0, -1):
         e = k * U * 0.11 * (1.0 + 0.5 * lvl)
         _paint(screen, pr, U, hsv(hue + k * 0.11 + t * 0.12, 1.0, 1.0), e)
     _paint(screen, pr, U, (6, 0, 14), 0)
-    nsp = 12 + int(10 * q)
+    nsp = 8 + int(14 * q)
     for hub in (make_tf(ox, oy)(0.0, 0.0), make_tf(ox, oy)(3.0, 0.0)):
         _spokes(screen, hub, U * 0.93, wheel, nsp, (6, 0, 14), 2)
         pygame.draw.circle(screen, hsv(hue + 0.5, 0.4, 1.0), hub, U * 0.1)

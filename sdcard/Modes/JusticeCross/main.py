@@ -31,7 +31,7 @@ BG_FILES = (None, "bg_concrete.jpg", "bg_woman.jpg", None)
 BASE_H = 0.80                     # cross height as a fraction of the screen's short side at default size (the album
                                   # backgrounds' own crosses are 0.74-0.84 of that, so the cross hides them)
 
-_s = {"anchors": {}, "woman_orig": None, "size": None, "art": None, "bgs": None, "dots": None, "glints": None, "embers": None, "overlay": None,
+_s = {"anchors": {}, "woman_orig": None, "size": None, "art": None, "bgs": None, "dots": None, "glints": None, "embers": None, "overlay": None, "base": (None, None), "scaled": (None, None),
       "acc": [0.0, 0.0], "prev": None, "idx": [0, 0], "last": None, "t": 0.0, "phase": 0.0, "env": 0.0,
       "pulses": []}
 
@@ -95,6 +95,8 @@ def bake_all(eyesy, w, h):
         bgs.append(bg.convert())
     _s["bgs"] = bgs
     _s["size"] = (w, h)
+    _s["base"] = (None, None)
+    _s["scaled"] = (None, None)
     _s["overlay"] = pygame.Surface((w, h), pygame.SRCALPHA)
     r2 = random.Random(7)
     _s["dots"] = [[r2.random(), r2.random(), r2.uniform(0.04, 0.12), r2.random() * TAU] for _ in range(70)]
@@ -137,6 +139,8 @@ def draw_glints(screen, t, ox, oy, u):
 
 def setup(screen, eyesy):
     _s["size"] = None
+    _s["base"] = (None, None)
+    _s["scaled"] = (None, None)
     _s["prev"] = None
     _s["acc"] = [0.0, 0.0]
     _s["idx"] = [0, 0]
@@ -213,24 +217,41 @@ def draw(screen, eyesy):
     amp = 0.012 + 0.14 * inten
     swell = 1.0 + amp * env
 
-    # outlines thrown off by each beat
+    # outlines thrown off by each beat (only the part of the screen they can reach is cleared and blitted)
     if _s["pulses"]:
         ov = _s["overlay"]
-        ov.fill((0, 0, 0, 0))
         reach = 0.12 + 0.55 * inten
+        ext = cross_px * swell * (1.0 + reach) * max(max(abs(x), abs(y)) for x, y in outline) + max(2, int(h / 180)) + 2
+        r = pygame.Rect(int(cx0 - ext), int(cy0 - ext), int(2 * ext), int(2 * ext)).clip(ov.get_rect())
+        ov.fill((0, 0, 0, 0), r)
         for a in _s["pulses"]:
             sc = cross_px * swell * (1.0 + reach * (1 - (1 - a) ** 2))
             alpha = int(255 * (1 - a) ** 1.6 * (0.35 + 0.65 * inten))
             col = ring_color(style, a, t) + (alpha,)
             pygame.draw.polygon(ov, col, [(cx0 + x * sc, cy0 + y * sc) for x, y in outline], max(2, int(h / 180)))
-        screen.blit(ov, (0, 0))
+        screen.blit(ov, r.topleft, r)
 
-    k = cross_px * swell / art_h                                 # art px -> screen px
+    # the cross is shrunk once to its resting size; the per-frame swell only rescales that (smaller) copy, and the
+    # result is reused while the size stays within a few pixels (the swell decays slowly, so most frames hit the cache)
+    k0 = cross_px / art_h
     aw, ah = art.get_size()
-    scaled = pygame.transform.smoothscale(art, (max(2, int(aw * k)), max(2, int(ah * k))))
-    if style == 3 and env > 0.02:                                # the glass lights up on the beat
-        v = int(110 * env * (0.3 + inten))
-        glow = scaled.copy()
-        glow.fill((v, v, v), special_flags=pygame.BLEND_RGB_MULT)
-        scaled.blit(glow, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
+    bkey = (style, int(k0 * 1000))
+    if _s["base"][0] != bkey:
+        _s["base"] = (bkey, pygame.transform.smoothscale(art, (max(2, int(aw * k0)), max(2, int(ah * k0)))))
+    base = _s["base"][1]
+    bw, bh = base.get_size()
+    tw = max(4, int(bw * swell) // 4 * 4)
+    th = max(2, int(bh * tw / bw))
+    glow_q = int(110 * env * (0.3 + inten)) // 8 * 8 if style == 3 and env > 0.02 else 0
+    skey = (bkey, tw, glow_q)
+    if _s["scaled"][0] != skey:
+        src = base
+        if glow_q:                                               # the glass lights up on the beat
+            src = base.copy()
+            src.fill((glow_q, glow_q, glow_q), special_flags=pygame.BLEND_RGB_MULT)
+            src.blit(base, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
+        scaled = src if (tw, th) == (bw, bh) else pygame.transform.smoothscale(src, (tw, th))
+        _s["scaled"] = (skey, scaled)
+    scaled = _s["scaled"][1]
+    k = tw / float(aw)                                           # art px -> screen px
     screen.blit(scaled, (int(cx0 - acx * k), int(cy0 - acy * k)))
