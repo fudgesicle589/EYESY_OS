@@ -180,7 +180,7 @@ JAW_G = 60.0
 
 _S = {"last": None, "beat": 0.0, "hands": [new_hand(), new_hand()], "J": 0.1, "JV": 0.0, "kick": 0.0, "shake": 0.0,
       "flash": 0.0, "shocks": [], "debris": [], "cracks": [], "t": 0.0, "stars": None, "size": None, "phase": 0.0,
-      "lens": 0.0, "hue": 0.0, "hy": 1.25, "hv": 0.0, "pk": None, "v3": 0.0, "v4": 0.0, "rng": random.Random(7), "small": None, "big": None, "gtick": 0, "fdt": 0.03, "lod": 0, "turn": 0.0}
+      "lens": 0.0, "hue": 0.0, "hy": 1.25, "hv": 0.0, "pk": None, "v3": 0.0, "v4": 0.0, "rng": random.Random(7), "small": None, "big": None, "gtick": 0, "hcache": [None, None], "fdt": 0.03, "lod": 0, "turn": 0.0}
 
 def setup(screen, eyesy):
     build_skull()
@@ -217,6 +217,7 @@ def impact(h, power):
 
 # ---------------------------------------------------------------- hand geometry, cached per (side, curl): it only changes when a hand's height does
 _HAND_CACHE = {}
+_COLORS = {}
 
 def hand_spec(side, curl):
     """the 15 boxes of a hand in hand space: (axis0, axis1, axis2, centre, hx, hy, hz), with curl quantised to 0.01"""
@@ -369,6 +370,15 @@ def draw(screen, eyesy):
     camz = CAM[2]
 
     def chrome_color(n, hue, hot=0.0):
+        key = (int(n[0] * 24.0 + 24.5), int(n[1] * 24.0 + 24.5), int(n[2] * 24.0 + 24.5), int(hue * 256.0) & 255, int(hot * 16.0))
+        c = _COLORS.get(key)
+        if c is None:
+            if len(_COLORS) > 6000:
+                _COLORS.clear()
+            c = _COLORS[key] = chrome_calc(n, hue, hot)
+        return c
+
+    def chrome_calc(n, hue, hot):
         d = n[0] * LIGHT[0] + n[1] * LIGHT[1] + n[2] * LIGHT[2]
         d = d if d > 0.0 else 0.0
         spec = d ** 14
@@ -534,6 +544,14 @@ def draw(screen, eyesy):
         sy_ = 1.0 - 0.15 * sq
         edge = None if lod else hsv(hue, 0.5, 0.45 + 0.4 * hot)
 
+        # a resting hand (and a still camera) draws exactly the same polygons frame after frame: re-use them
+        hkey = (int(H * 300), int(lean * 300), int(sq * 60), int(hot * 12), int(camx * 3000), int(camy * 3000),
+                int(h0 * 256), lod, int(T[2] * 300))
+        hc = _S["hcache"][h]
+        if hc is not None and hc[0] == hkey:
+            hand_groups.append((hc[1], hc[2]))
+            continue
+
         boxes = []
         lowest = 1e9
         zsum = 0.0
@@ -552,10 +570,11 @@ def draw(screen, eyesy):
         dy = HAND_LIFT * H - lowest                                     # rest the LOWEST point of the fist on the floor at H = 0
         ops = []
         colfn = lambda n, hue=hue, hot=hot: chrome_color(n, hue, hot)
-        for c, A, N in boxes:
-            emit_box(ops, (c[0], c[1] + dy, c[2]), A, N, colfn, edge)
+        for bi, (c, A, N) in enumerate(boxes):
+            emit_box(ops, (c[0], c[1] + dy, c[2]), A, N, colfn, edge if bi == 0 else None)   # outline the palm only: it is the costly part
         ops.sort(key=_depth, reverse=True)
         hand_groups.append((zsum / len(boxes), ops))
+        _S["hcache"][h] = (hkey, zsum / len(boxes), ops)
     hand_groups.sort(key=_first, reverse=False)                         # far hand (smaller z) first
 
     for ops, srt in skull_groups:
@@ -646,7 +665,11 @@ def draw(screen, eyesy):
     # ---- the window: everything inside it is the "screen"; the thick black border around it is the false frame ----
     wx, wy = int(xres * 0.07), int(yres * 0.05)
     win = pygame.Rect(wx, wy, xres - 2 * wx, int(yres * 0.77))
-    screen.fill((7, 6, 10))
+    bg = (7, 6, 10)
+    screen.fill(bg, (0, 0, xres, wy))
+    screen.fill(bg, (0, win.bottom, xres, yres - win.bottom))
+    screen.fill(bg, (0, wy, wx, win.h))
+    screen.fill(bg, (win.right, wy, xres - win.right, win.h))
     screen.set_clip(win)
     screen.fill((0, 0, 0), win)
     for sx, sy, ph in _S["stars"]:
@@ -654,7 +677,7 @@ def draw(screen, eyesy):
         screen.set_at((sx, sy), (b, b, b))
     corners = [proj(p) for p in ((-16, 0, 4.0), (16, 0, 4.0), (16, 0, -18), (-16, 0, -18))]
     poly_(screen, floor_col, [(c[0], c[1]) for c in corners])
-    for k in range(10):                                          # truss frames rushing toward the camera
+    for k in range(8 if lod else 10):                            # truss frames rushing toward the camera
         z = 3.0 - (k + phase) * ZSP
         pts = [proj(p) for p in ((-4.6, 0, z), (4.6, 0, z), (4.6, 4.9, z), (-4.6, 4.9, z))]
         dep = pts[0][2]
@@ -730,7 +753,8 @@ def draw(screen, eyesy):
         sw, sh_ = small.get_size()
         gx0, gy0 = wx // gs, wy // gs
         sub = small.subsurface(pygame.Rect(gx0, gy0, min(win.w // gs + 2, sw - gx0), min(win.h // gs + 2, sh_ - gy0)))
-        _S["big"] = pygame.transform.smoothscale(sub, (sub.get_width() * gs, sub.get_height() * gs))
+        half = pygame.transform.smoothscale(sub, (sub.get_width() * gs // 2, sub.get_height() * gs // 2))
+        _S["big"] = pygame.transform.scale(half, (half.get_width() * 2, half.get_height() * 2))
     elif lod:
         _S["big"] = None
     if _S["big"] is not None:

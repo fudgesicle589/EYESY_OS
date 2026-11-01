@@ -116,7 +116,24 @@ def knob_play(eyesy, dt):
     return vel, env, mom
 
 def setup(screen, eyesy):
-    pass
+    _fx["rings"] = []
+    _fx["sparks"] = []
+    _fx["floor"] = None
+
+# ---- beat extras: shockwave rings and sparks that fly out along the rays on every beat ----
+_fx = {"rings": [], "sparks": [], "floor": None}
+_MAX_SPARKS = 60
+
+def ray_edges(curl, n):
+    """cos/sin of the bend at n steps along a ray; the bend is the same for every ray, so it is worked out once a frame"""
+    offs = [curl * (j / n) ** 2 for j in range(1, n + 1)]
+    return [math.cos(o) for o in offs], [math.sin(o) for o in offs]
+
+def ray_points(cx, cy, far, a, coso, sino, n):
+    """points along one edge of a ray at angle a, using the angle-sum identity instead of a cos/sin call per point"""
+    ca, sa = math.cos(a), math.sin(a)
+    return [(cx + far * (j + 1) / n * (ca * coso[j] - sa * sino[j]),
+             cy + far * (j + 1) / n * (sa * coso[j] + ca * sino[j])) for j in range(n)]
 
 def draw(screen, eyesy):
     xres, yres = eyesy.xres, eyesy.yres
@@ -126,30 +143,69 @@ def draw(screen, eyesy):
     h0 += mom[3] * 2.0                                         # knob 4 slams the colors round while you turn it
     screen.fill(bg)
     cx, cy = xres / 2.0, yres / 2.0
-    far = math.hypot(xres, yres)
+    far = math.hypot(cx, cy)                                   # centre to corner is all the rays need to reach
     rays = 2 * (3 + int(eyesy.knob3 * 21.99))                 # an even number, 6..48
     wedge = 2 * math.pi / rays
     step = ease(clamp(frac * 1.4))
     rot = (math.floor(beats) + step) * wedge + mom[1] * 7.0 + env[1] * 0.4 * math.sin(beats * 4)     # flick knob 2 and the burst whips round, then settles back onto the beat
     light = hsv(h0, 0.85, 0.95)
     curl = eyesy.knob5 * 3.2 + mom[4] * 9.0                                  # how far the rays bend by the time they reach the edge
+    n = 1 if abs(curl) < 0.05 else (4 if abs(curl) < 1.0 else 8)            # straight rays need no extra points
+    coso, sino = ray_edges(curl, n)
+    rainbow = env[3] > 0.02
+    r1 = min(xres, yres) * (0.16 + 0.22 * eyesy.knob1) * (1.0 + 0.10 * kick) * (1.0 + clamp(mom[0] * 2.5, -0.4, 0.9))     # knob 1 swells the core past its size and relaxes
+
+    # a new beat: send out a shockwave ring and a fan of sparks
+    fl = math.floor(beats)
+    if _fx["floor"] is not None and fl != _fx["floor"]:
+        _fx["rings"].append(0.0)
+        for k in range(0, rays, 2):
+            if len(_fx["sparks"]) < _MAX_SPARKS:
+                _fx["sparks"].append([rot + (k + 0.5) * wedge, r1, far * random.uniform(0.5, 1.1), random.random()])
+    _fx["floor"] = fl
+
+    # the dim accent slivers in the gaps between the big rays give the burst some depth
+    dim = hsv(h0 + 0.08, 0.6, 0.30 + 0.12 * kick)
+    for i in range(1, rays, 2):
+        a = rot + i * wedge + wedge * 0.3
+        left = ray_points(cx, cy, far, a, coso, sino, n)
+        right = ray_points(cx, cy, far, a + wedge * 0.4, coso, sino, n)
+        pygame.draw.polygon(screen, dim, [(cx, cy)] + left + right[::-1])
+
     for i in range(0, rays, 2):                               # the big rays: every other wedge
         a = rot + i * wedge
-        left, right = [], []
-        for j in range(1, 11):
-            fr = j / 10.0
-            off = curl * fr * fr
-            left.append((cx + far * fr * math.cos(a + off), cy + far * fr * math.sin(a + off)))
-            right.append((cx + far * fr * math.cos(a + wedge + off), cy + far * fr * math.sin(a + wedge + off)))
-        ray = hsv(h0 + (i // 2) * 0.03 * env[3], 0.85, 0.95) if env[3] > 0.02 else light      # the rays split into a rainbow while knob 4 is played
+        left = ray_points(cx, cy, far, a, coso, sino, n)
+        right = ray_points(cx, cy, far, a + wedge, coso, sino, n)
+        ray = hsv(h0 + (i // 2) * 0.03 * env[3], 0.85, 0.95) if rainbow else light      # the rays split into a rainbow while knob 4 is played
         pygame.draw.polygon(screen, ray, [(cx, cy)] + left + right[::-1])
-    r1 = min(xres, yres) * (0.16 + 0.22 * eyesy.knob1) * (1.0 + 0.10 * kick) * (1.0 + clamp(mom[0] * 2.5, -0.4, 0.9))     # knob 1 swells the core past its size and relaxes
+
+    rings = []                                                # shockwave rings expand from the core and fade out
+    for age in _fx["rings"]:
+        age += dt
+        t = age / 1.2
+        if t < 1.0:
+            rings.append(age)
+            rad = int(r1 + (far - r1) * ease(t))
+            col = hsv(h0 + 0.5, 0.6, 1.0 - t)
+            pygame.draw.circle(screen, col, (int(cx), int(cy)), rad, max(1, int(6 * (1.0 - t))))
+    _fx["rings"] = rings
+
+    sparks = []                                               # sparks fly out along the rays and twinkle
+    for sp in _fx["sparks"]:
+        sp[1] += sp[2] * dt
+        if sp[1] < far:
+            sparks.append(sp)
+            col = hsv(h0 + 0.5 + sp[3] * 0.2, 0.4, 1.0)
+            size = 2 + int(3 * (1.0 - sp[1] / far))
+            pygame.draw.circle(screen, col, (int(cx + sp[1] * math.cos(sp[0])), int(cy + sp[1] * math.sin(sp[0]))), size)
+    _fx["sparks"] = sparks
+
     pygame.draw.circle(screen, bg, (int(cx), int(cy)), int(r1 * 1.08))                 # a clean disc for the inner burst
     rot2 = -rot * 1.5 + mom[2] * 10.0                          # knob 3 spins the inner burst against the outer one
     alt = hsv(h0 + 0.5, 0.75, 0.95)
     for i in range(0, rays, 2):                               # the inner burst turns the other way
         a = rot2 + i * wedge
-        pts = [(cx, cy)] + [(cx + r1 * math.cos(a + wedge * j / 6), cy + r1 * math.sin(a + wedge * j / 6)) for j in range(7)]
+        pts = [(cx, cy)] + [(cx + r1 * math.cos(a + wedge * j / 4), cy + r1 * math.sin(a + wedge * j / 4)) for j in range(5)]
         pygame.draw.polygon(screen, alt, pts)
     pygame.draw.circle(screen, hsv(h0, 0.2, 1.0), (int(cx), int(cy)), int(r1 * (0.32 + 0.16 * kick)))
     pygame.draw.circle(screen, hsv(h0 + 0.5, 0.9, 1.0), (int(cx), int(cy)), int(r1 * 0.12))
